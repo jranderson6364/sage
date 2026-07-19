@@ -1,0 +1,22 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# data cache (raw fetches, parquet, model artifacts)
+pipeline/data/
+*.parquet
+
+# node
+node_modules/
+dist/
+
+# editor/os
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
