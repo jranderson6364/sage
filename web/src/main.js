@@ -1,7 +1,9 @@
 import "./style.css";
 import Graph from "graphology";
 import Sigma from "sigma";
-import { Space3D, MOOD } from "./space3d.js";
+// three.js is a large dependency the 2D map/galaxy views never touch, so it's
+// loaded on demand the first time the user opens the 3D view (see setupView).
+let Space3D, MOOD;
 
 // Dataviz reference palette (dark column), assigned semantically to the most
 // common primary genres; everything else folds into muted "Other". Color is
@@ -363,7 +365,7 @@ function setupView() {
   }
 
   for (const [view, btn] of Object.entries(buttons)) {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       if (state.view === view) return;
       const prev = state.view;
       state.view = view;
@@ -374,6 +376,8 @@ function setupView() {
       const filters = document.getElementById("filters");
       if (view === "space") {
         document.getElementById("map").style.display = "none";
+        if (!Space3D) ({ Space3D, MOOD } = await import("./space3d.js"));
+        if (state.view !== "space") return; // user switched away while loading
         space ??= new Space3D(document.getElementById("space"), state, {
           onPick: (idx) => {
             selectMovie(idx);
@@ -390,7 +394,7 @@ function setupView() {
       } else {
         filters.hidden = true;
         renderLegend("genre");
-        if (prev === "space") {
+        if (prev === "space" && space) {
           space.hide();
           document.getElementById("map").style.display = "";
           renderer.refresh();
