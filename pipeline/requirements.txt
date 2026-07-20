@@ -1,0 +1,14 @@
+# Phase 1: data fetch
+requests
+pandas
+pyarrow
+python-dotenv
+tqdm
+
+# Phase 2: embeddings, ALS, layout
+sentence-transformers
+implicit
+umap-learn
+scikit-learn
+scipy
+numpy
