@@ -221,9 +221,13 @@ def main() -> None:
         if len(hits) == 0:
             print(f"  {title:40} (not in catalog)")
             continue
-        i = hits[0]
-        print(f"  {title:40} levity {pct(scores[i, 0]):3d} · "
-              f"threat {pct(scores[i, 1]):3d} · intimacy {pct(scores[i, 2]):3d}")
+        # A title can match multiple releases (e.g. Little Women 1994/2019) —
+        # print every match instead of silently grabbing hits[0], since that
+        # movie's own version can otherwise go unchecked.
+        for i in hits:
+            label = f"{title} ({movies['year'].iloc[i]})" if len(hits) > 1 else title
+            print(f"  {label:40} levity {pct(scores[i, 0]):3d} · "
+                  f"threat {pct(scores[i, 1]):3d} · intimacy {pct(scores[i, 2]):3d}")
 
     np.save(DATA_DIR / "axes.npy", scores)
     print(f"\nWrote {scores.shape} axis scores -> data/axes.npy")

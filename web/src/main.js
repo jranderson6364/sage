@@ -520,6 +520,9 @@ async function main() {
   }
 
   renderer = new Sigma(graph, document.getElementById("map"), {
+    // #map is display:none while the 3D view is active, so its own resize
+    // observer sees a zero-width container and throws without this.
+    allowInvalidContainer: true,
     labelColor: { color: "#a6a59c" },
     labelFont: "Geist, system-ui, sans-serif",
     labelWeight: "500",
