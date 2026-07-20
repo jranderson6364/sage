@@ -11,6 +11,7 @@ venv/
 pipeline/data/
 *.parquet
 
+
 # node
 node_modules/
 dist/
@@ -20,3 +21,4 @@ dist/
 .idea/
 Thumbs.db
 .DS_Store
+.gstack/
