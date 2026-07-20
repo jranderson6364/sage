@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sage — a map of movies</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <h1>Sage</h1>
+        <input
+          id="search"
+          type="search"
+          placeholder="Search movies…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div id="lens" role="group" aria-label="Similarity lens">
+          <button id="lens-best" class="active" title="Story + vibe + audience, fused">
+            Recommended
+          </button>
+          <button id="lens-text" title="Plot &amp; keyword similarity">
+            Similar story
+          </button>
+          <button id="lens-vibe" title="How it feels — community tag genome">
+            Similar vibe
+          </button>
+          <button id="lens-als" title="People who liked this also liked…">
+            Similar audience
+          </button>
+        </div>
+        <div id="view" role="group" aria-label="Layout">
+          <button id="view-map" class="active" title="Story-similarity map">Map</button>
+          <button id="view-galaxy" title="Story angle × release-year rings">Galaxy</button>
+          <button id="view-space" title="Levity × Threat × Intimacy, size = rating">3D</button>
+        </div>
+      </header>
+
+      <div id="map"></div>
+      <div id="space"></div>
+      <ul id="search-results" hidden></ul>
+
+      <aside id="detail" hidden>
+        <button id="detail-close" aria-label="Close">×</button>
+        <div id="detail-body"></div>
+      </aside>
+
+      <div id="legend"></div>
+
+      <div id="filters" hidden>
+        <div class="frow" data-axis="levity">
+          <span class="fmin">Somber</span>
+          <div class="dual">
+            <div class="track"></div><div class="fill"></div>
+            <input class="lo" type="range" min="-1" max="1" step="0.01" value="-1" />
+            <input class="hi" type="range" min="-1" max="1" step="0.01" value="1" />
+          </div>
+          <span class="fmax">Playful</span>
+        </div>
+        <div class="frow" data-axis="threat">
+          <span class="fmin">Safe</span>
+          <div class="dual">
+            <div class="track"></div><div class="fill"></div>
+            <input class="lo" type="range" min="-1" max="1" step="0.01" value="-1" />
+            <input class="hi" type="range" min="-1" max="1" step="0.01" value="1" />
+          </div>
+          <span class="fmax">Tense</span>
+        </div>
+        <div class="frow" data-axis="intimacy">
+          <span class="fmin">Detached</span>
+          <div class="dual">
+            <div class="track"></div><div class="fill"></div>
+            <input class="lo" type="range" min="-1" max="1" step="0.01" value="-1" />
+            <input class="hi" type="range" min="-1" max="1" step="0.01" value="1" />
+          </div>
+          <span class="fmax">Intimate</span>
+        </div>
+        <div class="frow" data-axis="rating">
+          <span class="fmin">★ 1</span>
+          <div class="dual">
+            <div class="track"></div><div class="fill"></div>
+            <input class="lo" type="range" min="1" max="10" step="0.1" value="1" />
+            <input class="hi" type="range" min="1" max="10" step="0.1" value="10" />
+          </div>
+          <span class="fmax">★ 10</span>
+        </div>
+        <div id="filter-count"></div>
+      </div>
+
+      <footer id="attribution">
+        Data: <a href="https://www.themoviedb.org/" target="_blank" rel="noopener">TMDB</a>
+        &amp; <a href="https://grouplens.org/datasets/movielens/" target="_blank" rel="noopener">MovieLens</a>.
+        Not endorsed or certified by TMDB.
+      </footer>
+
+      <div id="loading">
+        <span class="load-mark">Sage</span>
+        <span class="load-status">warming up the projector…</span>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

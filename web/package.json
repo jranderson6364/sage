@@ -1,0 +1,19 @@
+{
+  "name": "sage-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "graphology": "^0.26.0",
+    "sigma": "^3.0.2",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  }
+}
