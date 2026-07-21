@@ -1,0 +1,30 @@
+{
+  "_about": "Threat rankings for the groups in data/pairs_threat.json. Each entry is a permutation of that group's positions, ordered most-tense first. Judged by Claude. Ranking a group of 8 rather than answering 28 separate pairwise questions is deliberate: a single ordering can't contradict itself the way independent answers can, and it yields the same 28 comparisons.",
+  "axis": "threat",
+  "rankings": {
+    "0":  [2,6,3,4,0,7,1,5],
+    "1":  [4,5,3,1,2,0,7,6],
+    "2":  [6,1,7,2,0,3,5,4],
+    "3":  [5,1,2,3,7,4,6,0],
+    "4":  [0,6,5,1,2,4,3,7],
+    "5":  [7,4,6,2,0,1,5,3],
+    "6":  [6,0,7,5,4,2,3,1],
+    "7":  [5,2,6,3,1,0,7,4],
+    "8":  [2,5,7,6,1,3,4,0],
+    "9":  [6,0,2,4,5,1,7,3],
+    "10": [3,1,2,0,6,7,5,4],
+    "11": [3,1,5,6,7,0,2,4],
+    "12": [1,4,5,7,2,3,6,0],
+    "13": [4,5,1,3,0,7,2,6],
+    "14": [2,5,6,1,7,0,3,4],
+    "15": [6,5,0,2,3,1,4,7],
+    "16": [6,5,0,7,2,3,1,4],
+    "17": [7,0,5,6,3,2,1,4],
+    "18": [7,2,3,4,1,5,0,6],
+    "19": [4,0,3,7,2,1,5,6],
+    "20": [2,6,5,0,3,4,1,7],
+    "21": [7,3,1,2,5,0,4,6],
+    "22": [1,4,3,6,2,0,5,7],
+    "23": [1,0,2,5,4,3,7,6]
+  }
+}
