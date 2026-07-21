@@ -17,9 +17,9 @@ export const MOOD = {
   neutral: { r: 0.42, g: 0.47, b: 0.58, hex: "#6b7894" },
 };
 
-// Positions sit outside the point cloud's reach. The display transform is a
-// probit stretch, so the most extreme films land near ±1.6 rather than ±1 —
-// labels have to clear that or outliers render on top of them.
+// Positions sit outside the point cloud's reach. The display transform pushes
+// the outer fifth of films past the ±1 ring, the most extreme landing near
+// ±1.7 — labels have to clear that or outliers render on top of them.
 const AXIS_LABELS = [
   { text: "Playful", pos: [1.85, 0, 0], color: MOOD.levity.hex },
   { text: "Somber", pos: [-1.85, 0, 0] },
@@ -222,7 +222,11 @@ export class Space3D {
     return null;
   }
 
-  inFilter(m) {
+  inFilter(m, i) {
+    // List membership gates first, then the axis/rating sliders narrow
+    // further — the two compose, so you can filter by mood inside a list.
+    const members = this.state.listMembers;
+    if (members && !members.has(i)) return false;
     const f = this.state.filters;
     return (
       m.levity >= f.levity[0] && m.levity <= f.levity[1] &&
@@ -246,7 +250,7 @@ export class Space3D {
     let visible = 0;
     for (let i = 0; i < movies.length; i++) {
       const hi = highlighted.has(String(i));
-      const shown = selActive ? hi : this.inFilter(movies[i]);
+      const shown = selActive ? hi : this.inFilter(movies[i], i);
       if (!shown) {
         size.array[i] = 0;
         continue;
