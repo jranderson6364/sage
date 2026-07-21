@@ -123,6 +123,10 @@ const LENS_LABELS = {
   als: "Similar audience",
 };
 
+// Mobile's in-panel lens bar is much narrower than the topbar pill group,
+// so it gets its own short labels rather than wrapping the full ones.
+const LENS_SHORT = { best: "Best", text: "Story", vibe: "Vibe", als: "Audience" };
+
 const LENS_EMPTY = {
   vibe: "This movie isn't in the MovieLens tag genome — try the story lens.",
   als: `Too few MovieLens ratings for the audience lens —
@@ -141,6 +145,7 @@ function clearSelection() {
   document.getElementById("detail").hidden = true;
   if (state.view !== "space") renderer.refresh();
   space?.syncSelection();
+  updateFilterCount(); // selection changes visibleCount in 3D (see restyle)
 }
 
 function selectMovie(idx) {
@@ -159,6 +164,7 @@ function selectMovie(idx) {
   renderDetail(idx);
   if (state.view !== "space") renderer.refresh();
   space?.syncSelection();
+  updateFilterCount();
 }
 
 function flyTo(idx) {
@@ -232,7 +238,22 @@ function renderDetail(idx) {
     ? `More ${[...steer.tags].map((t) => escapeHtml(state.tagNames[t])).join(" + ")}`
     : LENS_LABELS[state.lens];
 
+  // Desktop keeps the lens switch in the topbar; on a phone-width sheet
+  // that's too cramped to be reachable, so it's re-rendered here as a
+  // sticky in-panel header (hidden on desktop — see .lens-m in style.css).
+  const lensBarMobile = `<div class="lens-m" role="group" aria-label="Similarity lens">
+    ${Object.entries(LENS_SHORT)
+      .map(([key, label]) => {
+        const active = state.lens === key;
+        const noData = (key === "vibe" && m.nn_vibe.length === 0) || (key === "als" && m.nn_als.length === 0);
+        return `<button data-lens="${key}" class="${active ? "active" : ""}${noData ? " no-data" : ""}"
+          aria-pressed="${active}">${label}</button>`;
+      })
+      .join("")}
+  </div>`;
+
   el.innerHTML = `
+    ${lensBarMobile}
     ${poster}
     <h2>${escapeHtml(m.title)}</h2>
     <p class="meta">${m.year ?? "—"} · ${m.genres.join(", ")}${directors}
@@ -243,6 +264,10 @@ function renderDetail(idx) {
     <h3>${heading}${steering && steer.loading ? " (loading…)" : ""}</h3>
     ${neighborBlock}
   `;
+
+  el.querySelectorAll(".lens-m [data-lens]").forEach((btn) => {
+    btn.addEventListener("click", () => selectLens(btn.dataset.lens));
+  });
 
   el.querySelectorAll(".chip").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -458,6 +483,9 @@ function setupLens() {
 
 // ---- legend ----
 
+// Desktop shows this panel open at all times; on mobile it collapses to a
+// small tap-to-expand pill (see the mobile media query) so it doesn't
+// permanently eat screen space.
 function renderLegend(mode = "genre") {
   let entries;
   let note = "";
@@ -480,20 +508,38 @@ function renderLegend(mode = "genre") {
       .map((g) => [g, GENRE_COLORS[g]]);
     entries.push(["Other", OTHER_COLOR]);
   }
-  document.getElementById("legend").innerHTML =
-    entries
-      .map(([g, c]) => `<div><span class="swatch" style="background:${c}"></span>${g}</div>`)
-      .join("") + note;
+  const legend = document.getElementById("legend");
+  legend.innerHTML =
+    `<button class="legend-toggle" aria-expanded="false">${mode === "mood" ? "Mood" : "Legend"}</button>
+     <div class="legend-items">` +
+    entries.map(([g, c]) => `<div><span class="swatch" style="background:${c}"></span>${g}</div>`).join("") +
+    note +
+    `</div>`;
+  legend.querySelector(".legend-toggle").addEventListener("click", () => {
+    const open = legend.classList.toggle("expanded");
+    legend.querySelector(".legend-toggle").setAttribute("aria-expanded", String(open));
+  });
 }
 
 // ---- axis/rating filters (3D view) ----
 
 function updateFilterCount() {
-  const el = document.getElementById("filter-count");
-  el.textContent = `${space?.visibleCount ?? state.movies.length} of ${state.movies.length} shown`;
+  const text = `${space?.visibleCount ?? state.movies.length} of ${state.movies.length} shown`;
+  document.getElementById("filter-count").textContent = text;
+  // Mobile-collapsed filters still need a hint of what's active without
+  // opening the sheet.
+  document.getElementById("filter-count-mini").textContent =
+    space && space.visibleCount < state.movies.length ? `· ${space.visibleCount}` : "";
 }
 
 function setupFilters() {
+  const toggle = document.getElementById("filters-toggle");
+  const body = document.getElementById("filters-body");
+  toggle.addEventListener("click", () => {
+    const open = body.classList.toggle("open");
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+
   for (const row of document.querySelectorAll("#filters .frow")) {
     const axis = row.dataset.axis;
     const lo = row.querySelector(".lo");
@@ -518,6 +564,14 @@ function setupFilters() {
 }
 
 // ---- boot ----
+
+// #view becomes a bottom tab bar on mobile (see style.css); the detail/
+// filters sheets dock above it via this custom property, measured rather
+// than guessed so it's exact regardless of device safe-area insets.
+function syncTabbarHeight() {
+  const h = document.getElementById("view").getBoundingClientRect().height;
+  if (h > 0) document.documentElement.style.setProperty("--tabbar-h", `${h}px`);
+}
 
 async function main() {
   const resp = await fetch(import.meta.env.BASE_URL + "data/movies.json");
@@ -593,6 +647,9 @@ async function main() {
   setupView();
   setupFilters();
   renderLegend();
+  syncTabbarHeight();
+  window.addEventListener("resize", syncTabbarHeight);
+  document.fonts?.ready?.then(syncTabbarHeight);
   document.body.classList.add("ready");
   setTimeout(() => document.getElementById("loading")?.remove(), 800);
 }
