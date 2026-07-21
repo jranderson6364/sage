@@ -52,6 +52,29 @@ AXIS_NAMES = ["levity", "threat", "intimacy"]
 LOW, HIGH = 3, 8
 SEED = 20260721
 
+# Feature block per axis. Cross-validation genuinely cannot separate these at
+# n=279 — every option sits inside one standard error — so these come from a
+# mechanistic audit against 100 popular films (evaluate_popular.py), where the
+# differences are large and consistent:
+#
+#   levity    g+rev   reviews say "hilarious" outright; plot text only gives
+#                     premise, and premise misleads (The Notebook's summary
+#                     reads romantic-serious). MAE 6.3 vs 6.7 genome, 7.6 +text.
+#   threat    genome  tags already encode tension precisely (tense, suspense,
+#                     terror). Both embeddings only add noise: 9.3 -> 10.3.
+#   intimacy  all     tags rarely record "is this film *about* closeness", so
+#                     films like The Martian had no signal at all and reverted
+#                     to the population mean, which ranking then dressed up as
+#                     ~58th percentile. Both embeddings describe connection and
+#                     isolation directly: MAE 9.8 -> 7.5, bias +5.9 -> +1.6.
+#
+# Set to None to fall back to the 1-SE automatic choice.
+AXIS_FEATURES = {
+    "levity": "ridge_g+rev",
+    "threat": "ridge_genome",
+    "intimacy": "ridge_all",
+}
+
 
 def knn_impute(emb, values, have_rows, n, k=10, power=5.0):
     """Fill rows missing `values` from their nearest neighbors that have it.
@@ -109,12 +132,43 @@ def main() -> None:
     review_emb = np.load(DATA_DIR / "review_emb.npy")
     review_rows = json.loads((DATA_DIR / "review_rows.json").read_text())
 
+    # Tried and rejected: dropping format/medium tags (animation, cartoon,
+    # pixar, cgi, franchise...) on the theory that they were suppressing threat
+    # for animated films, since "cartoon" dominates their tag mass. Measured
+    # no effect — popular-100 threat bias -7.0 -> -7.1, MAE 9.13 -> 9.28, The
+    # Lion King 21 -> 23. Removing a misleading tag doesn't supply the missing
+    # one; those films still carry no positive tension signal either way.
     genome_all = knn_impute(emb, genome, genome_rows, n)
     review_all = knn_impute(emb, review_emb, review_rows, n)
+
+    # TMDB keywords. Unlike the tag genome these exist for *every* movie,
+    # including releases far too recent for MovieLens to have tagged — and
+    # they're often explicitly tone-bearing ("supernatural horror",
+    # "psychological", "unrequited love"). That matters because the genome is
+    # missing for ~991 films, and a genome-only model scores those entirely
+    # from an imputed, i.e. fabricated, tag vector.
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    kw_docs = ["; ".join(k) for k in movies["keywords"]]
+    kw_vec = TfidfVectorizer(analyzer=lambda d: d.split("; "), min_df=25)
+    keywords = kw_vec.fit_transform(kw_docs).toarray().astype(np.float32)
+    print(f"keywords: {keywords.shape[1]} dims (min_df=25), "
+          f"{(keywords.any(axis=1)).sum()}/{n} movies non-empty")
+
+    # Feature blocks kept separable rather than one lump, because the two
+    # embedding sources behave very differently per axis: reviews describe how
+    # a film *felt* ("hilarious", "stressful"), while story text only
+    # describes premise — and premise is what misled levity (The Notebook's
+    # plot reads romantic-serious, its tags are pure romance, yet a
+    # text-inclusive model called it levity 60). Offering "+review" without
+    # "+text" lets an axis take the useful half.
     base = np.hstack([genome_all, emb, review_all])
     X = {
         "ridge_genome": genome_all,
+        "ridge_g+rev": np.hstack([genome_all, review_all]),
+        "ridge_g+txt": np.hstack([genome_all, emb]),
+        "ridge_gkw": np.hstack([genome_all, keywords]),
         "ridge_all": base,
+        "ridge_allkw": np.hstack([base, keywords]),
         "gbm": base,
     }
 
@@ -162,8 +216,9 @@ def main() -> None:
         print(f"[{axis}]")
 
         # Ordered simplest-first; the 1-SE rule below relies on this.
-        candidates = [k for k in ["ridge_genome", "ridge_all", "gbm",
-                                  "ridge_subs", "gbm_subs"] if k in X]
+        candidates = [k for k in ["ridge_genome", "ridge_g+rev", "ridge_g+txt",
+                                  "ridge_gkw", "ridge_all", "ridge_allkw",
+                                  "gbm", "ridge_subs", "gbm_subs"] if k in X]
         scored = []
         for kind in (candidates if not args.model else [args.model]):
             feats = X[kind]
@@ -201,9 +256,13 @@ def main() -> None:
         # recognizable films (The Notebook levity 60, Titanic 44), because a
         # spurious embedding direction generalizes badly off-distribution.
         # Tags are a far more honest feature space for this.
-        best_rho = max(s[1] for s in scored)
-        thresh = best_rho - max(s[2] for s in scored if s[1] == best_rho)
-        kind, cv_rho, se, model = next(s for s in scored if s[1] >= thresh)
+        pick = AXIS_FEATURES.get(axis) if not args.model else args.model
+        if pick and pick in {s[0] for s in scored}:
+            kind, cv_rho, se, model = next(s for s in scored if s[0] == pick)
+        else:
+            best_rho = max(s[1] for s in scored)
+            thresh = best_rho - max(s[2] for s in scored if s[1] == best_rho)
+            kind, cv_rho, se, model = next(s for s in scored if s[1] >= thresh)
         feats = X[kind]
         sc = StandardScaler().fit(feats[tr_idx])
         model.fit(sc.transform(feats[tr_idx]), y_tr[:, a])
