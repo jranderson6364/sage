@@ -55,16 +55,15 @@ def main() -> None:
     idx = np.array([int(k) for k in labels])
     truth = np.array([labels[k] for k in labels], dtype=float)  # n x 3, 1..10
     is_cov = np.array([i in genome_rows for i in idx])
-    # Convert to within-catalog percentile before measuring spread. Some
-    # scorers emit forced-uniform percentiles and some emit a predicted 1-10
-    # rating, and raw spreads across those two parameterizations aren't
-    # comparable — ranking first makes `sep` mean the same thing either way.
-    ranked = np.empty_like(scores, dtype=float)
-    for a in range(scores.shape[1]):
-        r = np.empty(len(scores))
-        r[np.argsort(scores[:, a], kind="stable")] = np.arange(len(scores))
-        ranked[:, a] = (r + 0.5) / len(scores) * 100
-    pred = ranked[idx]
+    # Measure spread on the values as actually shipped, mapped to 0-100.
+    #
+    # A previous version rank-transformed here first, to compare scorers with
+    # different parameterizations. That silently destroyed the only thing
+    # `sep` exists to detect: ranking is invariant to compression, so a model
+    # whose predictions had all collapsed toward the middle still scored a
+    # wide `sep`. Comparability isn't worth a metric that can't fail — this
+    # measures what a user actually sees on screen.
+    pred = (scores[idx] + 1) / 2 * 100
 
     print(f"{len(idx)} labeled movies "
           f"({is_cov.sum()} genome-covered, {(~is_cov).sum()} uncovered)")

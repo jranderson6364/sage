@@ -160,9 +160,11 @@ def main() -> None:
     chosen = {}
     for a, axis in enumerate(AXIS_NAMES):
         print(f"[{axis}]")
-        best = (None, -np.inf, None)
+
+        # Ordered simplest-first; the 1-SE rule below relies on this.
         candidates = [k for k in ["ridge_genome", "ridge_all", "gbm",
                                   "ridge_subs", "gbm_subs"] if k in X]
+        scored = []
         for kind in (candidates if not args.model else [args.model]):
             feats = X[kind]
             sc = StandardScaler().fit(feats[tr_idx])
@@ -181,11 +183,27 @@ def main() -> None:
             else:
                 p = cross_val_predict(build(kind), Xtr, y_tr[:, a], cv=cv)
                 model, cv_rho, tag = build(kind), spearmanr(y_tr[:, a], p).statistic, kind
-            print(f"  {tag:22} cv_rho {cv_rho:.3f}")
-            if cv_rho > best[1]:
-                best = (kind, cv_rho, model)
+            # Per-fold spread, so "better" can be distinguished from noise.
+            folds = []
+            for tr_i, te_i in cv.split(Xtr):
+                m = build(kind, best_a if kind.startswith("ridge") else None)
+                m.fit(Xtr[tr_i], y_tr[tr_i, a])
+                folds.append(spearmanr(y_tr[te_i, a], m.predict(Xtr[te_i])).statistic)
+            se = float(np.std(folds, ddof=1) / np.sqrt(len(folds)))
+            print(f"  {tag:22} cv_rho {cv_rho:.3f} ±{se:.3f}")
+            scored.append((kind, cv_rho, se, model))
 
-        kind, cv_rho, model = best
+        # 1-SE rule: take the simplest model within one standard error of the
+        # best, not the raw argmax. Chasing the argmax at n=279 picked
+        # ridge_all over ridge_genome on a 0.003 cv_rho edge, and those 768
+        # extra embedding dimensions turned out to inject real noise — it
+        # scored *worse* than even the hand-tuned scorer on levity for
+        # recognizable films (The Notebook levity 60, Titanic 44), because a
+        # spurious embedding direction generalizes badly off-distribution.
+        # Tags are a far more honest feature space for this.
+        best_rho = max(s[1] for s in scored)
+        thresh = best_rho - max(s[2] for s in scored if s[1] == best_rho)
+        kind, cv_rho, se, model = next(s for s in scored if s[1] >= thresh)
         feats = X[kind]
         sc = StandardScaler().fit(feats[tr_idx])
         model.fit(sc.transform(feats[tr_idx]), y_tr[:, a])
@@ -211,25 +229,28 @@ def main() -> None:
         print(f"  {axis:9} mean {c.mean():.2f}  sd {c.std():.2f}  "
               f"min {c.min():.2f}  max {c.max():.2f}")
 
-    # Map onto the front end's [-1, 1] with an affine stretch from the 1st to
-    # 99th percentile. Deliberately NOT a rank transform: ranking would force
-    # every axis flat, which is what made the old cloud a uniform cube with no
-    # clusters or empty regions. An affine map preserves shape, skew and gaps
-    # exactly and only changes the units, while still using the full volume —
-    # a raw 1-10 mapping would leave everything bunched near the middle,
-    # since real movies aren't spread evenly across these scales.
+    # Rank-normalize onto [-1, 1].
+    #
+    # An earlier version shipped the raw predicted rating (affine-stretched)
+    # on the theory that a real, skewed distribution is more honest than a
+    # forced-uniform one. That was wrong for this product. Ridge shrinks
+    # predictions toward the mean, so the interior stayed crowded even after
+    # the endpoints were stretched: Die Hard's threat fell 90 -> 67, Heat
+    # 93 -> 74, while Titanic rose 15 -> 48. Rank metrics couldn't see any of
+    # it — compression preserves order, so rho and a rank-based `sep` both
+    # stayed happy while every displayed number drifted to the middle.
+    #
+    # This view exists to *compare* films: uniform spread is what makes the
+    # cloud readable and the filter sliders meaningful, and it makes the
+    # readout a true percentile again. The learned model's contribution is a
+    # better ordering, which survives the transform intact.
     out = np.empty_like(scores)
     for a in range(scores.shape[1]):
-        lo, hi = np.percentile(scores[:, a], [1, 99])
-        out[:, a] = np.clip((scores[:, a] - lo) / (hi - lo), 0, 1) * 2 - 1
+        r = np.empty(len(scores))
+        r[np.argsort(scores[:, a], kind="stable")] = np.arange(len(scores))
+        out[:, a] = ((r + 0.5) / len(scores)) * 2 - 1
     np.save(args.out, out.astype(np.float32))
     print(f"\nWrote {out.shape} -> {args.out}  (models: {chosen})")
-    print("display spread after stretch (fraction of movies per axis third):")
-    for a, axis in enumerate(AXIS_NAMES):
-        c = out[:, a]
-        thirds = [float((c < -1 / 3).mean()), float(((c >= -1 / 3) & (c < 1 / 3)).mean()),
-                  float((c >= 1 / 3).mean())]
-        print(f"  {axis:9} low {thirds[0]:.0%}  mid {thirds[1]:.0%}  high {thirds[2]:.0%}")
 
 
 if __name__ == "__main__":
