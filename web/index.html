@@ -48,23 +48,23 @@
           spellcheck="false"
         />
         <div id="lens" role="group" aria-label="Similarity lens">
-          <button id="lens-best" class="active" title="Story + vibe + audience, fused">
+          <button id="lens-best" data-lens="best" class="active" aria-pressed="true" title="Story + vibe + audience, fused">
             Recommended
           </button>
-          <button id="lens-text" title="Plot &amp; keyword similarity">
+          <button id="lens-text" data-lens="text" aria-pressed="false" title="Plot &amp; keyword similarity">
             Similar story
           </button>
-          <button id="lens-vibe" title="How it feels — community tag genome">
+          <button id="lens-vibe" data-lens="vibe" aria-pressed="false" title="How it feels — community tag genome">
             Similar vibe
           </button>
-          <button id="lens-als" title="People who liked this also liked…">
+          <button id="lens-als" data-lens="als" aria-pressed="false" title="People who liked this also liked…">
             Similar audience
           </button>
         </div>
         <div id="view" role="group" aria-label="Layout">
-          <button id="view-map" class="active" title="Story-similarity map">Map</button>
-          <button id="view-galaxy" title="Story angle × release-year rings">Galaxy</button>
-          <button id="view-space" title="Levity × Threat × Intimacy, size = rating">3D</button>
+          <button id="view-map" class="active" aria-pressed="true" title="Story-similarity map">Map</button>
+          <button id="view-galaxy" aria-pressed="false" title="Story angle × release-year rings">Galaxy</button>
+          <button id="view-space" aria-pressed="false" title="Levity × Threat × Intimacy, size = rating">3D</button>
         </div>
       </header>
 

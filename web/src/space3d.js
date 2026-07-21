@@ -180,6 +180,10 @@ export class Space3D {
     this.raycaster.params.Points.threshold = 0.02;
     this.pointer = new THREE.Vector2();
     this.hovered = null;
+    // On touch, pointermove only fires while dragging (there's no hover) —
+    // showing a hover tooltip there would just flicker mid-orbit. Tap still
+    // picks via pointerdown/up regardless; touch users see detail on tap.
+    this.isCoarsePointer = window.matchMedia("(pointer: coarse)").matches;
 
     const canvas = this.renderer.domElement;
     canvas.addEventListener("pointerdown", (e) => {
@@ -329,8 +333,8 @@ export class Space3D {
     }
     this.controls.update();
 
-    // Hover: raycast at most once per frame.
-    if (this.pointerEvent) {
+    // Hover: raycast at most once per frame. Skipped on touch (see above).
+    if (this.pointerEvent && !this.isCoarsePointer) {
       const idx = this.pick(this.pointerEvent);
       if (idx !== this.hovered) {
         this.hovered = idx;

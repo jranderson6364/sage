@@ -381,6 +381,36 @@ body.ready #attribution {
   margin-bottom: 12px;
 }
 
+/* Only the values carry color — same "data is the only accent" rule as
+   everywhere else; the labels stay neutral caption text. */
+.axis-readout {
+  display: flex;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-low);
+  margin-bottom: 14px;
+}
+
+.axis-readout b {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: normal;
+  margin-left: 4px;
+}
+
+.axis-readout b.levity {
+  color: var(--amber);
+}
+.axis-readout b.threat {
+  color: var(--crimson);
+}
+.axis-readout b.intimacy {
+  color: var(--pink);
+}
+
 #detail .overview {
   line-height: 1.55;
   font-size: 13px;

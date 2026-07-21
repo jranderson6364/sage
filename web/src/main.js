@@ -196,10 +196,17 @@ function renderDetail(idx) {
     ? `<img class="poster" src="${POSTER_BASE}${m.poster}" alt="" loading="lazy" />`
     : "";
   const directors = m.directors.length ? ` · ${m.directors.join(", ")}` : "";
+  const pct = (v) => Math.round(((v + 1) / 2) * 100);
+  const axisReadout = `<div class="axis-readout">
+    <span>Levity <b class="levity">${pct(m.levity)}</b></span>
+    <span>Threat <b class="threat">${pct(m.threat)}</b></span>
+    <span>Intimacy <b class="intimacy">${pct(m.intimacy)}</b></span>
+  </div>`;
   const chips = m.tags.length
-    ? `<div class="chips">${m.tags
+    ? `<div class="chips" role="group" aria-label="What did you like about this?">${m.tags
         .slice(0, 8)
         .map(([t]) => `<button class="chip${steer.tags.has(t) ? " active" : ""}"
+          aria-pressed="${steer.tags.has(t)}"
           data-tag="${t}">${escapeHtml(state.tagNames[t])}</button>`)
         .join("")}</div>
       <p class="chips-hint">pick what you liked — recommendations follow</p>`
@@ -230,6 +237,7 @@ function renderDetail(idx) {
     <h2>${escapeHtml(m.title)}</h2>
     <p class="meta">${m.year ?? "—"} · ${m.genres.join(", ")}${directors}
       · ★ ${m.rating.toFixed(1)}</p>
+    ${axisReadout}
     ${chips}
     <p class="overview">${escapeHtml(m.overview)}</p>
     <h3>${heading}${steering && steer.loading ? " (loading…)" : ""}</h3>
@@ -270,10 +278,20 @@ function escapeHtml(s) {
 function setupSearch() {
   const input = document.getElementById("search");
   const results = document.getElementById("search-results");
+  let focused = -1; // index into the current <li> list, -1 = none
 
   function close() {
     results.hidden = true;
     results.innerHTML = "";
+    focused = -1;
+  }
+
+  function setFocused(i) {
+    const items = results.querySelectorAll("li");
+    if (!items.length) return;
+    focused = (i + items.length) % items.length;
+    items.forEach((li, j) => li.classList.toggle("focused", j === focused));
+    items[focused].scrollIntoView({ block: "nearest" });
   }
 
   input.addEventListener("input", () => {
@@ -283,6 +301,7 @@ function setupSearch() {
     for (let i = 0; i < state.movies.length && hits.length < 12; i++) {
       if (state.movies[i].title.toLowerCase().includes(q)) hits.push(i);
     }
+    focused = -1;
     results.innerHTML = hits
       .map(
         (i) => `<li data-idx="${i}">
@@ -304,10 +323,19 @@ function setupSearch() {
   });
 
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") close();
+    if (results.hidden) return;
+    if (e.key === "Escape") return close();
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      return setFocused(focused + 1);
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      return setFocused(focused - 1);
+    }
     if (e.key === "Enter") {
-      const first = results.querySelector("li");
-      if (first) first.click();
+      const item = results.querySelectorAll("li")[focused] ?? results.querySelector("li");
+      if (item) item.click();
     }
   });
 
@@ -371,6 +399,7 @@ function setupView() {
       state.view = view;
       for (const [v, b] of Object.entries(buttons)) {
         b.classList.toggle("active", v === view);
+        b.setAttribute("aria-pressed", String(v === view));
       }
 
       const filters = document.getElementById("filters");
@@ -407,23 +436,24 @@ function setupView() {
 
 // ---- lens toggle ----
 
+// Shared by the persistent topbar lens buttons and the in-panel mobile copy
+// rendered inside the detail sheet (renderDetail) — both sets just carry a
+// matching data-lens attribute, so either can drive the same state.
+function selectLens(lens) {
+  if (state.lens === lens) return;
+  state.lens = lens;
+  document.querySelectorAll("[data-lens]").forEach((b) => {
+    const active = b.dataset.lens === lens;
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-pressed", String(active));
+  });
+  if (state.selected !== null) selectMovie(Number(state.selected));
+}
+
 function setupLens() {
-  const buttons = {
-    best: document.getElementById("lens-best"),
-    text: document.getElementById("lens-text"),
-    vibe: document.getElementById("lens-vibe"),
-    als: document.getElementById("lens-als"),
-  };
-  for (const [lens, btn] of Object.entries(buttons)) {
-    btn.addEventListener("click", () => {
-      if (state.lens === lens) return;
-      state.lens = lens;
-      for (const [l, b] of Object.entries(buttons)) {
-        b.classList.toggle("active", l === lens);
-      }
-      if (state.selected !== null) selectMovie(Number(state.selected));
-    });
-  }
+  document.querySelectorAll("#lens [data-lens]").forEach((btn) => {
+    btn.addEventListener("click", () => selectLens(btn.dataset.lens));
+  });
 }
 
 // ---- legend ----
@@ -569,6 +599,6 @@ async function main() {
 
 main().catch((err) => {
   document.querySelector("#loading .load-status").textContent =
-    "no map data — run the pipeline first (see README)";
+    "couldn't load the map — check your connection and reload";
   console.error(err);
 });
