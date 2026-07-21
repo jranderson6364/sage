@@ -1,6 +1,6 @@
 // 3D semantic-axes view: levity x threat x intimacy, dot size = rating.
-// A three.js point cloud living alongside the sigma views; selection state is
-// shared (main.js owns it, this module renders it).
+// The app's only view — a three.js point cloud. Selection state is shared
+// (main.js owns it, this module renders it).
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -277,7 +277,6 @@ export class Space3D {
     size.needsUpdate = true;
   }
 
-  // Kept for main.js symmetry with the sigma views.
   syncSelection() {
     this.restyle();
   }

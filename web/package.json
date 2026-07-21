@@ -9,8 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "graphology": "^0.26.0",
-    "sigma": "^3.0.2",
     "three": "^0.185.1"
   },
   "devDependencies": {

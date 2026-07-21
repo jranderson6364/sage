@@ -2,25 +2,34 @@
 
 An interactive map of movies that doubles as a recommender.
 
-Several thousand films are positioned in 2D space by similarity and rendered as an
-explorable WebGL graph. Click a movie and its nearest neighbors light up — that's the
-recommendation. Toggle between two notions of "similar":
+Several thousand films float in a 3D space whose axes are how the movie *feels*, not
+what it's about:
 
-- **Similar story** — plot/keyword text embeddings (content-based)
-- **Similar audience** — real user ratings via ALS matrix factorization (collaborative filtering)
+- **Levity** — how heavily it takes itself (somber ↔ playful)
+- **Threat** — tension, stakes, danger (safe ↔ tense)
+- **Intimacy** — focus on close emotional connection (detached ↔ intimate)
+
+Dot size is rating, hue blends the three moods. Click a movie and its recommendations
+light up; everything else clears away. Pick tags describing what you liked about it and
+the recommendations re-rank around that aspect.
 
 ## How it works
 
 Everything is precomputed offline in Python and exported as static JSON — no backend.
 
 ```
-TMDB + MovieLens → embeddings / ALS → UMAP 2D layout → k-NN neighbors → static JSON → sigma.js
+TMDB + MovieLens → embeddings / ALS / tag genome / reviews
+                 → semantic axes + fused k-NN → static JSON → three.js
 ```
+
+Recommendations are one model: weighted reciprocal-rank fusion of three channels —
+story embeddings, MovieLens tag genome, and ALS audience factors. The channels aren't
+exposed separately; they exist to feed the fusion.
 
 ## Repo layout
 
-- `pipeline/` — Python data + ML pipeline (fetch, embed, layout, export)
-- `web/` — sigma.js front end (deployed to GitHub Pages)
+- `pipeline/` — Python data + ML pipeline (fetch, embed, score, export)
+- `web/` — three.js front end (deployed to GitHub Pages)
 
 ## Running the pipeline
 
@@ -40,10 +49,9 @@ python build_genome.py                                # 5. tag-genome "vibe" vec
 python fetch_reviews.py                               # 6. TMDB user reviews (cached, resumable)
 python embed_reviews.py                               # 7. mean-pooled review embeddings
 python semantic_axes.py                               # 8. levity/threat/intimacy axis scores
-python layout_umap.py                                 # 9. 2D map layout (UMAP)
-python export_web.py                                  # 10. static JSON -> web/public/data/
+python export_web.py                                  # 9. static JSON -> web/public/data/
 
-python evaluate_lenses.py     # optional: score channels against co-rating truth
+python evaluate_lenses.py     # optional: score recommendation channels vs co-rating truth
 ```
 
 ## Running the web app

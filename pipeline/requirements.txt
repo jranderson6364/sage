@@ -5,10 +5,9 @@ pyarrow
 python-dotenv
 tqdm
 
-# Phase 2: embeddings, ALS, layout
+# Phase 2: embeddings, ALS, axis scoring
 sentence-transformers
 implicit
-umap-learn
 scikit-learn
 scipy
 numpy

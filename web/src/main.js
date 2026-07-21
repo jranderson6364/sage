@@ -1,36 +1,12 @@
 import "./style.css";
-import Graph from "graphology";
-import Sigma from "sigma";
-// three.js is a large dependency the 2D map/galaxy views never touch, so it's
-// loaded on demand the first time the user opens the 3D view (see setupView).
-let Space3D, MOOD;
-
-// Dataviz reference palette (dark column), assigned semantically to the most
-// common primary genres; everything else folds into muted "Other". Color is
-// only a grouping cue — identity always comes from labels, hover, and the
-// detail panel.
-const GENRE_COLORS = {
-  Drama: "#3987e5", // blue
-  Comedy: "#c98500", // yellow
-  Action: "#d95926", // orange
-  Adventure: "#199e70", // aqua
-  Horror: "#e66767", // red
-  Thriller: "#9085e9", // violet
-  "Science Fiction": "#008300", // green
-  Animation: "#d55181", // magenta
-};
-const OTHER_COLOR = "#898781";
-const DIM_COLOR = "#2c2c2a";
-const EDGE_COLOR = "#52514e";
+import { Space3D, MOOD } from "./space3d.js";
 
 const POSTER_BASE = "https://image.tmdb.org/t/p/w342";
 
 const state = {
   movies: [],
   tagNames: [],
-  lens: "best", // "best" | "text" | "vibe" | "als"
-  view: "map", // "map" | "galaxy" | "space"
-  selected: null, // node key (string) or null
+  selected: null, // movie index (string) or null
   highlighted: new Set(),
   filters: {
     levity: [-1, 1],
@@ -54,6 +30,8 @@ const steer = {
 };
 
 const STEER_BOOST = 6;
+
+let space;
 
 async function loadSteeringMatrix() {
   if (steer.matrix || steer.loading) return;
@@ -90,48 +68,15 @@ function steeredNeighbors(idx, k = 10) {
   return scored.slice(0, k).map(([, r]) => rows[r]);
 }
 
-let graph;
-let renderer;
-let space; // 3D view (lazy-initialized on first open)
-
-function primaryGenre(genres) {
-  for (const g of genres) if (GENRE_COLORS[g]) return g;
-  return null;
-}
-
-function nodeColor(movie) {
-  const g = primaryGenre(movie.genres);
-  return g ? GENRE_COLORS[g] : OTHER_COLOR;
-}
-
+// One recommendation model: the precomputed fusion of story, vibe, and
+// audience (export_web.py), optionally re-ranked by the user's picked tags.
 function neighborsOf(idx) {
   if (steer.tags.size > 0) {
     const steered = steeredNeighbors(idx);
     if (steered) return steered;
   }
-  const m = state.movies[idx];
-  if (state.lens === "best") return m.nn_best;
-  if (state.lens === "vibe") return m.nn_vibe;
-  if (state.lens === "als") return m.nn_als;
-  return m.nn_text;
+  return state.movies[idx].nn;
 }
-
-const LENS_LABELS = {
-  best: "Recommended",
-  text: "Similar story",
-  vibe: "Similar vibe",
-  als: "Similar audience",
-};
-
-// Mobile's in-panel lens bar is much narrower than the topbar pill group,
-// so it gets its own short labels rather than wrapping the full ones.
-const LENS_SHORT = { best: "Best", text: "Story", vibe: "Vibe", als: "Audience" };
-
-const LENS_EMPTY = {
-  vibe: "This movie isn't in the MovieLens tag genome — try the story lens.",
-  als: `Too few MovieLens ratings for the audience lens —
-        coverage is thin for recent releases. Try the story lens.`,
-};
 
 // ---- selection ----
 
@@ -139,13 +84,9 @@ function clearSelection() {
   state.selected = null;
   state.highlighted.clear();
   steer.tags.clear();
-  graph.clearEdges();
-  document.getElementById("lens-vibe").classList.remove("no-data");
-  document.getElementById("lens-als").classList.remove("no-data");
   document.getElementById("detail").hidden = true;
-  if (state.view !== "space") renderer.refresh();
   space?.syncSelection();
-  updateFilterCount(); // selection changes visibleCount in 3D (see restyle)
+  updateFilterCount();
 }
 
 function selectMovie(idx) {
@@ -153,29 +94,14 @@ function selectMovie(idx) {
   if (state.selected !== key) steer.tags.clear(); // steering is per-movie
   state.selected = key;
   state.highlighted = new Set([key]);
-  graph.clearEdges();
-  for (const nb of neighborsOf(idx)) {
-    state.highlighted.add(String(nb));
-    graph.addEdge(key, String(nb), { color: EDGE_COLOR, size: 1 });
-  }
-  const m = state.movies[idx];
-  document.getElementById("lens-vibe").classList.toggle("no-data", m.nn_vibe.length === 0);
-  document.getElementById("lens-als").classList.toggle("no-data", m.nn_als.length === 0);
+  for (const nb of neighborsOf(idx)) state.highlighted.add(String(nb));
   renderDetail(idx);
-  if (state.view !== "space") renderer.refresh();
   space?.syncSelection();
   updateFilterCount();
 }
 
 function flyTo(idx) {
-  if (state.view === "space") {
-    space.flyTo(idx);
-    return;
-  }
-  const pos = renderer.getNodeDisplayData(String(idx));
-  if (pos) {
-    renderer.getCamera().animate({ x: pos.x, y: pos.y, ratio: 0.25 }, { duration: 600 });
-  }
+  space?.flyTo(idx);
 }
 
 // ---- detail panel ----
@@ -229,31 +155,12 @@ function renderDetail(idx) {
       </div>`;
     })
     .join("");
-  const neighborBlock =
-    neighbors.length > 0
-      ? neighborItems
-      : `<p class="no-lens">${LENS_EMPTY[state.lens] ?? ""}</p>`;
   const steering = steer.tags.size > 0 && steer.rowOf.has(idx);
   const heading = steering
     ? `More ${[...steer.tags].map((t) => escapeHtml(state.tagNames[t])).join(" + ")}`
-    : LENS_LABELS[state.lens];
-
-  // Desktop keeps the lens switch in the topbar; on a phone-width sheet
-  // that's too cramped to be reachable, so it's re-rendered here as a
-  // sticky in-panel header (hidden on desktop — see .lens-m in style.css).
-  const lensBarMobile = `<div class="lens-m" role="group" aria-label="Similarity lens">
-    ${Object.entries(LENS_SHORT)
-      .map(([key, label]) => {
-        const active = state.lens === key;
-        const noData = (key === "vibe" && m.nn_vibe.length === 0) || (key === "als" && m.nn_als.length === 0);
-        return `<button data-lens="${key}" class="${active ? "active" : ""}${noData ? " no-data" : ""}"
-          aria-pressed="${active}">${label}</button>`;
-      })
-      .join("")}
-  </div>`;
+    : "Recommended";
 
   el.innerHTML = `
-    ${lensBarMobile}
     ${poster}
     <h2>${escapeHtml(m.title)}</h2>
     <p class="meta">${m.year ?? "—"} · ${m.genres.join(", ")}${directors}
@@ -262,12 +169,8 @@ function renderDetail(idx) {
     ${chips}
     <p class="overview">${escapeHtml(m.overview)}</p>
     <h3>${heading}${steering && steer.loading ? " (loading…)" : ""}</h3>
-    ${neighborBlock}
+    ${neighborItems}
   `;
-
-  el.querySelectorAll(".lens-m [data-lens]").forEach((btn) => {
-    btn.addEventListener("click", () => selectLens(btn.dataset.lens));
-  });
 
   el.querySelectorAll(".chip").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -340,7 +243,10 @@ function setupSearch() {
       li.addEventListener("click", () => {
         const idx = Number(li.dataset.idx);
         close();
-        input.value = state.movies[idx].title;
+        // Don't echo the title back into the box — picking a dot or a
+        // neighbor changes the selection too, and a stale query would then
+        // name the wrong movie. The detail panel is the source of truth.
+        input.value = "";
         selectMovie(idx);
         flyTo(idx);
       });
@@ -369,159 +275,28 @@ function setupSearch() {
   });
 }
 
-// ---- view switcher (map <-> galaxy) ----
-
-let tweenRaf = null;
-
-function animatePositions(target, duration = 1100) {
-  cancelAnimationFrame(tweenRaf);
-  const from = state.movies.map((_, i) => ({
-    x: graph.getNodeAttribute(String(i), "x"),
-    y: graph.getNodeAttribute(String(i), "y"),
-  }));
-  const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-  const start = performance.now();
-
-  function frame(now) {
-    const t = Math.min(1, (now - start) / duration);
-    const k = ease(t);
-    state.movies.forEach((m, i) => {
-      const [tx, ty] = target(m);
-      graph.mergeNodeAttributes(String(i), {
-        x: from[i].x + (tx - from[i].x) * k,
-        y: from[i].y + (ty - from[i].y) * k,
-      });
-    });
-    if (t < 1) tweenRaf = requestAnimationFrame(frame);
-  }
-  tweenRaf = requestAnimationFrame(frame);
-}
-
-function setupView() {
-  const buttons = {
-    map: document.getElementById("view-map"),
-    galaxy: document.getElementById("view-galaxy"),
-    space: document.getElementById("view-space"),
-  };
-  let sigmaLayout = "map"; // which coordinate set the sigma graph currently holds
-
-  function applySigmaLayout(view) {
-    const galaxy = view === "galaxy";
-    graph.forEachNode((node, attrs) => {
-      if (attrs.marker) graph.setNodeAttribute(node, "hidden", !galaxy);
-    });
-    if (sigmaLayout !== view) {
-      animatePositions(galaxy ? (m) => [m.gx, m.gy] : (m) => [m.x, m.y]);
-      sigmaLayout = view;
-    }
-    renderer.getCamera().animate({ x: 0.5, y: 0.5, ratio: 1 }, { duration: 1100 });
-  }
-
-  for (const [view, btn] of Object.entries(buttons)) {
-    btn.addEventListener("click", async () => {
-      if (state.view === view) return;
-      const prev = state.view;
-      state.view = view;
-      for (const [v, b] of Object.entries(buttons)) {
-        b.classList.toggle("active", v === view);
-        b.setAttribute("aria-pressed", String(v === view));
-      }
-
-      const filters = document.getElementById("filters");
-      if (view === "space") {
-        document.getElementById("map").style.display = "none";
-        if (!Space3D) ({ Space3D, MOOD } = await import("./space3d.js"));
-        if (state.view !== "space") return; // user switched away while loading
-        space ??= new Space3D(document.getElementById("space"), state, {
-          onPick: (idx) => {
-            selectMovie(idx);
-            flyTo(idx); // center the idle orbit on the picked movie
-          },
-          onClear: clearSelection,
-          neighborsOf,
-        });
-        space.show();
-        space.restyle();
-        filters.hidden = false;
-        updateFilterCount();
-        renderLegend("mood");
-      } else {
-        filters.hidden = true;
-        renderLegend("genre");
-        if (prev === "space" && space) {
-          space.hide();
-          document.getElementById("map").style.display = "";
-          renderer.refresh();
-        }
-        applySigmaLayout(view);
-      }
-    });
-  }
-}
-
-// ---- lens toggle ----
-
-// Shared by the persistent topbar lens buttons and the in-panel mobile copy
-// rendered inside the detail sheet (renderDetail) — both sets just carry a
-// matching data-lens attribute, so either can drive the same state.
-function selectLens(lens) {
-  if (state.lens === lens) return;
-  state.lens = lens;
-  document.querySelectorAll("[data-lens]").forEach((b) => {
-    const active = b.dataset.lens === lens;
-    b.classList.toggle("active", active);
-    b.setAttribute("aria-pressed", String(active));
-  });
-  if (state.selected !== null) selectMovie(Number(state.selected));
-}
-
-function setupLens() {
-  document.querySelectorAll("#lens [data-lens]").forEach((btn) => {
-    btn.addEventListener("click", () => selectLens(btn.dataset.lens));
-  });
-}
-
 // ---- legend ----
 
-// Desktop shows this panel open at all times; on mobile it collapses to a
-// small tap-to-expand pill (see the mobile media query) so it doesn't
-// permanently eat screen space.
-function renderLegend(mode = "genre") {
-  let entries;
-  let note = "";
-  if (mode === "mood") {
-    entries = [
-      ["Playful", MOOD.levity.hex],
-      ["Tense", MOOD.threat.hex],
-      ["Intimate", MOOD.intimacy.hex],
-      ["Neutral", MOOD.neutral.hex],
-    ];
-    note = `<div class="legend-note">hues blend · size = rating</div>`;
-  } else {
-    const counts = {};
-    for (const m of state.movies) {
-      const g = primaryGenre(m.genres) ?? "Other";
-      counts[g] = (counts[g] ?? 0) + 1;
-    }
-    entries = Object.keys(GENRE_COLORS)
-      .filter((g) => counts[g])
-      .map((g) => [g, GENRE_COLORS[g]]);
-    entries.push(["Other", OTHER_COLOR]);
-  }
+function renderLegend() {
+  const entries = [
+    ["Playful", MOOD.levity.hex],
+    ["Tense", MOOD.threat.hex],
+    ["Intimate", MOOD.intimacy.hex],
+    ["Neutral", MOOD.neutral.hex],
+  ];
   const legend = document.getElementById("legend");
   legend.innerHTML =
-    `<button class="legend-toggle" aria-expanded="false">${mode === "mood" ? "Mood" : "Legend"}</button>
+    `<button class="legend-toggle" aria-expanded="false">Mood</button>
      <div class="legend-items">` +
     entries.map(([g, c]) => `<div><span class="swatch" style="background:${c}"></span>${g}</div>`).join("") +
-    note +
-    `</div>`;
+    `<div class="legend-note">hues blend · size = rating</div></div>`;
   legend.querySelector(".legend-toggle").addEventListener("click", () => {
     const open = legend.classList.toggle("expanded");
     legend.querySelector(".legend-toggle").setAttribute("aria-expanded", String(open));
   });
 }
 
-// ---- axis/rating filters (3D view) ----
+// ---- axis/rating filters ----
 
 function updateFilterCount() {
   const text = `${space?.visibleCount ?? state.movies.length} of ${state.movies.length} shown`;
@@ -565,14 +340,6 @@ function setupFilters() {
 
 // ---- boot ----
 
-// #view becomes a bottom tab bar on mobile (see style.css); the detail/
-// filters sheets dock above it via this custom property, measured rather
-// than guessed so it's exact regardless of device safe-area insets.
-function syncTabbarHeight() {
-  const h = document.getElementById("view").getBoundingClientRect().height;
-  if (h > 0) document.documentElement.style.setProperty("--tabbar-h", `${h}px`);
-}
-
 async function main() {
   const resp = await fetch(import.meta.env.BASE_URL + "data/movies.json");
   const data = await resp.json();
@@ -581,75 +348,22 @@ async function main() {
   steer.rows = data.genome_rows;
   data.genome_rows.forEach((mi, r) => steer.rowOf.set(mi, r));
 
-  const maxVotes = Math.max(...state.movies.map((m) => m.votes));
-  graph = new Graph();
-  state.movies.forEach((m, i) => {
-    graph.addNode(String(i), {
-      x: m.x,
-      y: m.y,
-      size: 1.5 + 5 * Math.sqrt(m.votes / maxVotes),
-      label: m.title,
-      color: nodeColor(m),
-    });
-  });
-
-  // Decade ring labels for the galaxy view (hidden on the flat map).
-  for (const d of data.decades) {
-    graph.addNode(`decade-${d.label}`, {
-      x: 0,
-      y: d.r,
-      size: 1,
-      color: "#383835",
-      label: d.label,
-      marker: true,
-      hidden: true,
-      forceLabel: true,
-    });
-  }
-
-  renderer = new Sigma(graph, document.getElementById("map"), {
-    // #map is display:none while the 3D view is active, so its own resize
-    // observer sees a zero-width container and throws without this.
-    allowInvalidContainer: true,
-    labelColor: { color: "#a6a59c" },
-    labelFont: "Geist, system-ui, sans-serif",
-    labelWeight: "500",
-    labelSize: 12,
-    labelRenderedSizeThreshold: 5,
-    zIndex: true,
-    nodeReducer(node, data) {
-      if (data.marker) return data; // decade rings never dim
-      if (state.selected === null) return data;
-      // A selection with no neighbors in the active lens (no ratings data)
-      // shouldn't black out the map — just spotlight the selected node.
-      if (state.highlighted.size <= 1) {
-        return node === state.selected ? { ...data, zIndex: 2, highlighted: true } : data;
-      }
-      if (state.highlighted.has(node)) {
-        return { ...data, zIndex: 2, highlighted: node === state.selected };
-      }
-      return { ...data, color: DIM_COLOR, label: null, zIndex: 0 };
+  space = new Space3D(document.getElementById("space"), state, {
+    onPick: (idx) => {
+      selectMovie(idx);
+      flyTo(idx); // center the idle orbit on the picked movie
     },
+    onClear: clearSelection,
+    neighborsOf,
   });
+  space.show();
+  space.restyle();
 
-  renderer.on("clickNode", ({ node }) => {
-    if (graph.getNodeAttribute(node, "marker")) return;
-    selectMovie(Number(node));
-  });
-  renderer.on("clickStage", clearSelection);
-  const mapEl = document.getElementById("map");
-  renderer.on("enterNode", () => (mapEl.style.cursor = "pointer"));
-  renderer.on("leaveNode", () => (mapEl.style.cursor = ""));
   document.getElementById("detail-close").addEventListener("click", clearSelection);
 
   setupSearch();
-  setupLens();
-  setupView();
   setupFilters();
   renderLegend();
-  syncTabbarHeight();
-  window.addEventListener("resize", syncTabbarHeight);
-  document.fonts?.ready?.then(syncTabbarHeight);
   document.body.classList.add("ready");
   setTimeout(() => document.getElementById("loading")?.remove(), 800);
 }

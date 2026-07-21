@@ -1,20 +1,22 @@
 """Export the static JSON that powers the web app.
 
-Combines movies.parquet, the UMAP layout, and all similarity spaces into one
-file. Neighbors are precomputed here so the front end does zero math:
+Combines movies.parquet with the semantic axes and every similarity space
+into one file. The app has a single recommendation model, so exactly one
+neighbor list ships per movie:
 
-  - nn_best: master recommendation — weighted reciprocal-rank fusion of the
-             three channels below (never empty; falls back to whatever
-             channels cover the movie)
-  - nn_text: k nearest by story embedding (all movies)
-  - nn_vibe: k nearest by tag-genome relevance (empty list if the movie isn't
-             in the genome)
-  - nn_als:  k nearest by ALS item factors (empty list if the movie didn't
-             have enough ratings for the audience lens)
+  - nn: weighted reciprocal-rank fusion of three internal channels — story
+        embedding (all movies), tag genome (covered subset), and ALS item
+        factors (rated subset). Never empty: a movie missing the genome/ALS
+        channels still fuses whatever it does have, down to text alone.
+
+The individual channels are deliberately *not* exported — they exist only to
+feed the fusion. Movie positions come from the axes (levity/threat/intimacy),
+so no 2D layout is exported either.
 
 Each movie also carries its top genome tags ([tag_index, relevance] pairs into
-the top-level "tags" name list) so the UI can explain *why* two movies match.
-Neighbor lists hold row indices into the same movies array.
+the top-level "tags" name list) so the UI can explain *why* two movies match
+and drive aspect steering. Neighbor lists hold row indices into the movies
+array.
 
 Writes web/public/data/movies.json (Vite serves public/ verbatim).
 
@@ -36,11 +38,12 @@ WEB_DATA_DIR = PIPELINE_DIR.parent / "web" / "public" / "data"
 
 OVERVIEW_CHARS = 300
 
-# Master lens: reciprocal-rank fusion over each channel's top-FUSE_K.
-# Weights follow evaluate_lenses.py (genome is by far the strongest content
-# signal; ALS adds real audience taste; text is the always-available floor
-# that carries movies the other channels don't cover). Refine here, then
-# re-run evaluate_lenses.py to check the change actually helped.
+# The recommendation model: reciprocal-rank fusion over each channel's
+# top-FUSE_K. Weights follow evaluate_lenses.py (genome is by far the
+# strongest content signal; ALS adds real audience taste; text is the
+# always-available floor that carries movies the other channels don't
+# cover). Refine here, then re-run evaluate_lenses.py to check the change
+# actually helped.
 FUSE_K = 50
 RRF_K = 60
 MASTER_WEIGHTS = {"genome": 0.5, "als": 0.3, "text": 0.2}
@@ -57,42 +60,6 @@ def top_k_cosine(emb: np.ndarray, k: int) -> np.ndarray:
     return idx[rows, order]
 
 
-def galaxy_layout(layout: np.ndarray, years: pd.Series) -> tuple[np.ndarray, list[dict]]:
-    """Polar "galaxy" projection of the map.
-
-    Angle keeps each movie's story neighborhood (bearing from the UMAP
-    centroid), radius is release year — oldest at the core, newest at the rim,
-    like tree rings. Radius follows the cumulative movie count (sqrt for equal
-    area density) rather than the year itself, so sparse early decades compress
-    toward the core instead of leaving empty rings.
-
-    Returns per-movie xy plus ring positions for decade labels.
-    """
-    R0 = 0.06  # hole at the core so the oldest films don't stack on one point
-
-    cx, cy = layout.mean(axis=0)
-    theta = np.arctan2(layout[:, 1] - cy, layout[:, 0] - cx)
-
-    yr = pd.to_numeric(years, errors="coerce")
-    yr = yr.fillna(yr.median()).to_numpy(dtype=float)
-    n = len(yr)
-    rank = np.empty(n)
-    rank[np.argsort(yr, kind="stable")] = np.arange(n)
-    radius = R0 + (1 - R0) * np.sqrt((rank + 0.5) / n)
-
-    xy = np.stack([radius * np.cos(theta), radius * np.sin(theta)], axis=1)
-
-    decades = []
-    for d in range(1930, 2030, 10):
-        frac_before = float((yr < d).mean())
-        if 0.01 < frac_before < 0.995:
-            decades.append({
-                "label": f"{d}s",
-                "r": round(R0 + (1 - R0) * np.sqrt(frac_before), 4),
-            })
-    return xy.astype(np.float32), decades
-
-
 def truncate(text: str | None, limit: int) -> str:
     if not text or len(text) <= limit:
         return text or ""
@@ -101,19 +68,17 @@ def truncate(text: str | None, limit: int) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--k", type=int, default=10, help="neighbors per lens")
+    parser.add_argument("--k", type=int, default=10, help="neighbors per movie")
     args = parser.parse_args()
 
     movies = pd.read_parquet(DATA_DIR / "movies.parquet")
-    layout = np.load(DATA_DIR / "layout.npy")
     text_emb = np.load(DATA_DIR / "text_emb.npy")
     axes = np.load(DATA_DIR / "axes.npy")  # levity, threat, intimacy (semantic_axes.py)
-    assert len(movies) == len(layout) == len(text_emb) == len(axes)
+    assert len(movies) == len(text_emb) == len(axes)
 
     nn_text = top_k_cosine(text_emb, FUSE_K)
-    galaxy, decades = galaxy_layout(layout, movies["year"])
 
-    # Vibe lens: k-NN in tag-genome space, over the covered subset.
+    # Genome channel: k-NN in tag-genome space, over the covered subset.
     genome = np.load(DATA_DIR / "genome.npy")
     genome_rows = json.loads((DATA_DIR / "genome_rows.json").read_text())
     tag_names = json.loads((DATA_DIR / "genome_tags.json").read_text())
@@ -124,7 +89,7 @@ def main() -> None:
         for gi, movie_i in enumerate(genome_rows)
     }
     movie_tags = {movie_i: top_tags[gi] for gi, movie_i in enumerate(genome_rows)}
-    print(f"vibe lens covers {len(genome_rows)} / {len(movies)} movies")
+    print(f"genome channel covers {len(genome_rows)} / {len(movies)} movies")
 
     # ALS covers the subset of movies that had enough MovieLens ratings.
     factors = np.load(DATA_DIR / "als_item_factors.npy")
@@ -141,10 +106,10 @@ def main() -> None:
         movie_i: [covered[j] for j in nn_sub[si]]
         for si, movie_i in enumerate(covered)
     }
-    print(f"audience lens covers {len(covered)} / {len(movies)} movies")
+    print(f"ALS channel covers {len(covered)} / {len(movies)} movies")
 
     def fuse(i: int) -> list[int]:
-        """Master recommendation: weighted RRF over the available channels."""
+        """The recommendation: weighted RRF over the available channels."""
         lists = {
             "text": nn_text[i],
             "genome": nn_vibe.get(i),
@@ -171,17 +136,10 @@ def main() -> None:
             "poster": row["poster_path"] if pd.notna(row["poster_path"]) else None,
             "rating": round(float(row["vote_average"]), 1),
             "votes": int(row["vote_count"]),
-            "x": round(float(layout[i, 0]), 4),
-            "y": round(float(layout[i, 1]), 4),
-            "gx": round(float(galaxy[i, 0]), 4),
-            "gy": round(float(galaxy[i, 1]), 4),
             "levity": round(float(axes[i, 0]), 3),
             "threat": round(float(axes[i, 1]), 3),
             "intimacy": round(float(axes[i, 2]), 3),
-            "nn_best": fuse(i),
-            "nn_text": [int(j) for j in nn_text[i][: args.k]],
-            "nn_vibe": nn_vibe.get(i, [])[: args.k],
-            "nn_als": nn_als.get(i, [])[: args.k],
+            "nn": fuse(i),
             "tags": movie_tags.get(i, []),
         })
 
@@ -206,7 +164,6 @@ def main() -> None:
         # bare NaN, which is invalid JSON and breaks the whole front end.
         json.dumps({
             "movies": nodes,
-            "decades": decades,
             "tags": tag_names,
             "genome_rows": genome_rows,
         }, separators=(",", ":"), ensure_ascii=False, allow_nan=False),

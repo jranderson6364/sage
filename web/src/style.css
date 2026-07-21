@@ -23,11 +23,6 @@
 
   --blur: blur(18px) saturate(1.3);
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
-
-  /* Real height of the mobile bottom tab bar, measured in JS (syncTabbarHeight)
-     so sheets dock flush regardless of device safe-area insets. This default
-     only matters for the instant before that measurement lands. */
-  --tabbar-h: 64px;
 }
 
 * {
@@ -61,15 +56,10 @@ body {
   border-radius: 2px;
 }
 
-#map,
 #space {
   position: absolute;
   inset: 0;
   background: var(--void);
-}
-
-#space {
-  display: none;
 }
 
 #space canvas {
@@ -239,66 +229,6 @@ body.ready #attribution {
   font-size: 11px;
   color: var(--ink-low);
   align-self: center;
-}
-
-/* ---- segmented controls ---- */
-
-#lens,
-#view {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--glass);
-  -webkit-backdrop-filter: var(--blur);
-  backdrop-filter: var(--blur);
-}
-
-#lens button,
-#view button {
-  padding: 6px 13px;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ink-mid);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.18s var(--ease), color 0.18s var(--ease),
-    transform 0.1s var(--ease);
-}
-
-#lens button:active,
-#view button:active {
-  transform: scale(0.96);
-}
-
-#lens button.active,
-#view button.active {
-  background: var(--ink-hi);
-  color: var(--void);
-  box-shadow: 0 0 18px rgba(245, 244, 240, 0.18);
-}
-
-#lens button:not(.active):hover,
-#view button:not(.active):hover {
-  color: var(--ink-hi);
-}
-
-/* Selected movie has no data for this lens. */
-#lens button.no-data,
-.lens-m button.no-data {
-  text-decoration: line-through;
-  text-decoration-color: var(--ink-low);
-  opacity: 0.55;
-}
-
-/* Mobile-only copy of the lens switch, re-rendered inside the detail sheet
-   (see renderDetail) since the topbar is too narrow for it there. */
-.lens-m {
-  display: none;
 }
 
 /* ---- detail panel ---- */
@@ -814,40 +744,15 @@ body.ready #attribution {
     top: 58px;
     width: auto;
   }
-  #lens {
-    display: none;
-  }
-
-  /* ---- bottom tab bar (view switch) ---- */
-  #view {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 12;
-    justify-content: stretch;
-    gap: 0;
-    padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
-    border-radius: 0;
-    border: none;
-    border-top: 1px solid var(--line);
-    background: var(--glass-hi);
-  }
-  #view button {
-    flex: 1;
-    padding: 10px 6px;
-    font-size: 12.5px;
-    text-align: center;
-  }
-
   /* ---- detail sheet ---- */
   #detail {
     left: 0;
     right: 0;
     top: auto;
-    bottom: var(--tabbar-h);
+    bottom: 0;
     width: auto;
-    max-height: calc(100dvh - var(--tabbar-h) - 64px);
+    max-height: calc(100dvh - 64px);
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
     border-radius: 20px 20px 0 0;
   }
   #detail:not([hidden]) {
@@ -870,43 +775,12 @@ body.ready #attribution {
     font-size: 17px;
   }
 
-  /* Sticky in-panel lens switch — full-bleed to the sheet's edges, docked at
-     the scroll box's top edge (the negative margin cancels #detail's own
-     padding so it sits flush rather than floating inset). */
-  .lens-m {
-    display: flex;
-    gap: 4px;
-    position: sticky;
-    top: -18px;
-    z-index: 2;
-    margin: -18px -18px 14px;
-    padding: 10px 14px;
-    background: var(--glass-hi);
-    border-bottom: 1px solid var(--line);
-  }
-  .lens-m button {
-    flex: 1;
-    padding: 7px 4px;
-    border: none;
-    border-radius: 999px;
-    background: rgba(245, 244, 240, 0.05);
-    color: var(--ink-mid);
-    font: inherit;
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-  }
-  .lens-m button.active {
-    background: var(--ink-hi);
-    color: var(--void);
-  }
-
   /* ---- legend: collapses to a small tap-to-expand pill, bottom-left,
-     clear of the tab bar and never competing with the detail/filters sheet
-     that docks full-width in the center ---- */
+     above the collapsed filters bar and never competing with the sheet that
+     docks full-width across the bottom ---- */
   #legend {
     left: 12px;
-    bottom: calc(var(--tabbar-h) + 10px);
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px));
     display: flex;
     flex-direction: column-reverse;
     padding: 0;
@@ -948,19 +822,21 @@ body.ready #attribution {
     display: flex;
   }
 
-  /* ---- 3D filter sheet: same bottom slot as the detail sheet, collapsed
+  /* ---- filter sheet: same bottom slot as the detail sheet, collapsed
      to a small toggle by default; a selection takes over the slot ---- */
   #filters {
     left: 0;
     right: 0;
-    bottom: var(--tabbar-h);
+    bottom: 0;
     transform: none;
     width: auto;
-    padding: 0;
-    background: none;
+    /* On the container, not the toggle: whichever child is last (the toggle
+       when collapsed, the body when open) needs to clear the home indicator. */
+    padding: 0 0 env(safe-area-inset-bottom, 0px);
+    background: var(--glass-hi);
+    -webkit-backdrop-filter: var(--blur);
+    backdrop-filter: var(--blur);
     border: none;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
   }
   #detail:not([hidden]) ~ #filters {
     display: none;
