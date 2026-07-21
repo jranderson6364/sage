@@ -17,13 +17,16 @@ export const MOOD = {
   neutral: { r: 0.42, g: 0.47, b: 0.58, hex: "#6b7894" },
 };
 
+// Positions sit outside the point cloud's reach. The display transform is a
+// probit stretch, so the most extreme films land near ±1.6 rather than ±1 —
+// labels have to clear that or outliers render on top of them.
 const AXIS_LABELS = [
-  { text: "Playful", pos: [1.3, 0, 0], color: MOOD.levity.hex },
-  { text: "Somber", pos: [-1.3, 0, 0] },
-  { text: "Tense", pos: [0, 1.3, 0], color: MOOD.threat.hex },
-  { text: "Safe", pos: [0, -1.3, 0] },
-  { text: "Intimate", pos: [0, 0, 1.3], color: MOOD.intimacy.hex },
-  { text: "Detached", pos: [0, 0, -1.3] },
+  { text: "Playful", pos: [1.85, 0, 0], color: MOOD.levity.hex },
+  { text: "Somber", pos: [-1.85, 0, 0] },
+  { text: "Tense", pos: [0, 1.85, 0], color: MOOD.threat.hex },
+  { text: "Safe", pos: [0, -1.85, 0] },
+  { text: "Intimate", pos: [0, 0, 1.85], color: MOOD.intimacy.hex },
+  { text: "Detached", pos: [0, 0, -1.85] },
 ];
 
 function moodColor(m) {
@@ -99,7 +102,7 @@ export class Space3D {
     this.scene.background = new THREE.Color("#09090b");
 
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.01, 50);
-    this.camera.position.set(2.3, 1.8, 2.3);
+    this.camera.position.set(3.1, 2.4, 3.1);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -144,9 +147,9 @@ export class Space3D {
     // Axis guide lines through the origin.
     const axisGeo = new THREE.BufferGeometry().setFromPoints(
       [
-        [-1.15, 0, 0], [1.15, 0, 0],
-        [0, -1.15, 0], [0, 1.15, 0],
-        [0, 0, -1.15], [0, 0, 1.15],
+        [-1.7, 0, 0], [1.7, 0, 0],
+        [0, -1.7, 0], [0, 1.7, 0],
+        [0, 0, -1.7], [0, 0, 1.7],
       ].map((p) => new THREE.Vector3(...p))
     );
     this.scene.add(

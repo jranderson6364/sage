@@ -9,12 +9,27 @@ const state = {
   arcTypes: [],
   selected: null, // movie index (string) or null
   highlighted: new Set(),
+  // Axis bounds match the slider range, which is wider than [-1, 1] because
+  // the display transform pushes the most extreme films past the axis ring.
   filters: {
-    levity: [-1, 1],
-    threat: [-1, 1],
-    intimacy: [-1, 1],
+    levity: [-1.7, 1.7],
+    threat: [-1.7, 1.7],
+    intimacy: [-1.7, 1.7],
     rating: [1, 10],
   },
+  // Curated lists. Picking one scopes the whole app to its films — the cloud,
+  // search, and the recommendations narrow together, and the three axis
+  // filters keep working inside that smaller world.
+  //
+  // `listNN` is why this needs pipeline support rather than a client-side
+  // filter: a ~100-film list is ~2% of the catalog, so a movie's global top-10
+  // neighbors contain roughly none of it. export_web.py re-ranks every channel
+  // over members only and fuses them with the same weights, so the
+  // recommendations are the same model looking at a smaller world.
+  lists: [],
+  activeList: null, // slug, or null for the whole catalog
+  listMembers: null, // Set of movie indices, or null
+  listNN: null, // movie index (string) -> in-list neighbors, or null
 };
 
 // Aspect steering: the user picks tags they liked about the selected movie;
@@ -33,6 +48,25 @@ const steer = {
 const STEER_BOOST = 6;
 
 let space;
+
+// Percentile rank per axis, computed once at boot. The 3D coordinate is a
+// tail-stretched value that runs past ±1 so outliers separate visually, which
+// makes it useless as a readout — the panel should say "how does this compare
+// to every other film", and that's the rank. The stretch is monotone, so
+// ranking the shipped values recovers it exactly.
+const axisPct = { levity: [], threat: [], intimacy: [] };
+
+function computeAxisPercentiles() {
+  const n = state.movies.length;
+  for (const axis of ["levity", "threat", "intimacy"]) {
+    const order = state.movies
+      .map((m, i) => [m[axis], i])
+      .sort((a, b) => a[0] - b[0]);
+    const out = new Array(n);
+    order.forEach(([, i], r) => (out[i] = Math.round(((r + 0.5) / n) * 100)));
+    axisPct[axis] = out;
+  }
+}
 
 async function loadSteeringMatrix() {
   if (steer.matrix || steer.loading) return;
@@ -60,6 +94,7 @@ function steeredNeighbors(idx, k = 10) {
   const scored = [];
   for (let r = 0; r < rows.length; r++) {
     if (r === gi) continue;
+    if (state.listMembers && !state.listMembers.has(rows[r])) continue;
     const off = r * dim;
     let s = 0;
     for (let d = 0; d < dim; d++) s += ref[d] * matrix[off + d];
@@ -76,6 +111,9 @@ function neighborsOf(idx) {
     const steered = steeredNeighbors(idx);
     if (steered) return steered;
   }
+  // Inside a list, use its own in-list neighbors — never the global ones,
+  // which point almost entirely outside the list.
+  if (state.listNN) return state.listNN[String(idx)] ?? [];
   return state.movies[idx].nn;
 }
 
@@ -152,11 +190,10 @@ function renderDetail(idx) {
     ? `<img class="poster" src="${POSTER_BASE}${m.poster}" alt="" loading="lazy" />`
     : "";
   const directors = m.directors.length ? ` · ${m.directors.join(", ")}` : "";
-  const pct = (v) => Math.round(((v + 1) / 2) * 100);
   const axisReadout = `<div class="axis-readout">
-    <span>Levity <b class="levity">${pct(m.levity)}</b></span>
-    <span>Threat <b class="threat">${pct(m.threat)}</b></span>
-    <span>Intimacy <b class="intimacy">${pct(m.intimacy)}</b></span>
+    <span>Levity <b class="levity">${axisPct.levity[idx]}</b></span>
+    <span>Threat <b class="threat">${axisPct.threat[idx]}</b></span>
+    <span>Intimacy <b class="intimacy">${axisPct.intimacy[idx]}</b></span>
   </div>`;
   const chips = m.tags.length
     ? `<div class="chips" role="group" aria-label="What did you like about this?">${m.tags
@@ -371,6 +408,7 @@ async function main() {
   state.movies = data.movies;
   state.tagNames = data.tags;
   state.arcTypes = data.arcTypes ?? [];
+  computeAxisPercentiles();
   steer.rows = data.genome_rows;
   data.genome_rows.forEach((mi, r) => steer.rowOf.set(mi, r));
 

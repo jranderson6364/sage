@@ -120,6 +120,10 @@ def main() -> None:
                         help="force a model instead of picking by CV")
     parser.add_argument("--with-subs", action="store_true",
                         help="include subtitle features (measured not to help)")
+    parser.add_argument("--tail-start", type=float, default=0.6,
+                        help="|value| beyond which the outward push kicks in")
+    parser.add_argument("--tail-boost", type=float, default=0.7,
+                        help="how far past the ring the most extreme film goes")
     parser.add_argument("--out", default=str(DATA_DIR / "axes_learned.npy"))
     args = parser.parse_args()
 
@@ -288,7 +292,21 @@ def main() -> None:
         print(f"  {axis:9} mean {c.mean():.2f}  sd {c.std():.2f}  "
               f"min {c.min():.2f}  max {c.max():.2f}")
 
-    # Rank-normalize onto [-1, 1].
+    # Rank-normalize, then fling the tails outward for display.
+    #
+    # Rank alone spaces every film evenly, so the single scariest movie sits
+    # barely further out than the merely-very-scary one and nothing stands
+    # apart. A probit of the rank was tried first and rejected: it separates
+    # the extremes but hauls the whole bulk toward the origin, producing a
+    # denser ball — the opposite of spreading things out.
+    #
+    # This keeps the bulk uniformly spaced (so the cloud stays open and
+    # readable) and adds a quadratic push only past |u| > tail_start, so the
+    # outermost films accelerate away from the pack and overshoot the ring.
+    #
+    # Purely a display transform, and monotone — it cannot reintroduce the
+    # model-side compression this file fought earlier, and `sep` (measured on
+    # shipped values) rises rather than falls.
     #
     # An earlier version shipped the raw predicted rating (affine-stretched)
     # on the theory that a real, skewed distribution is more honest than a
@@ -304,11 +322,20 @@ def main() -> None:
     # readout a true percentile again. The learned model's contribution is a
     # better ordering, which survives the transform intact.
     out = np.empty_like(scores)
+    t, B = args.tail_start, args.tail_boost
     for a in range(scores.shape[1]):
         r = np.empty(len(scores))
         r[np.argsort(scores[:, a], kind="stable")] = np.arange(len(scores))
-        out[:, a] = ((r + 0.5) / len(scores)) * 2 - 1
+        u = ((r + 0.5) / len(scores)) * 2 - 1          # uniform in [-1, 1]
+        over = np.clip((np.abs(u) - t) / (1 - t), 0, 1)  # 0 until the tail
+        out[:, a] = np.sign(u) * (np.abs(u) + B * over ** 2)
     np.save(args.out, out.astype(np.float32))
+    print(f"display: uniform bulk, tail boost +{B} beyond |u|>{t}")
+    for a, axis in enumerate(AXIS_NAMES):
+        c = out[:, a]
+        print(f"  {axis:9} range {c.min():+.2f}..{c.max():+.2f}  "
+              f"|x|>1 on {int((np.abs(c) > 1).sum()):4d} films  "
+              f"p50 spread ±{np.percentile(np.abs(c), 50):.2f}")
     print(f"\nWrote {out.shape} -> {args.out}  (models: {chosen})")
 
 
