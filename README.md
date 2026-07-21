@@ -50,7 +50,11 @@ python fetch_reviews.py                               # 6. TMDB user reviews (ca
 python embed_reviews.py                               # 7. mean-pooled review embeddings
 python semantic_axes.py                               # 8. hand-tuned axis scores (fallback/baseline)
 python train_axes.py                                  # 9. learned axis scores (what ships)
-python export_web.py                                  # 10. static JSON -> web/public/data/
+python fetch_subtitles.py --index                     # 10. index the remote 25GB subtitle archive
+python fetch_subtitles.py --fetch                     #     range-fetch only our ~3.7k films (~390MB)
+python subtitle_features.py                           # 11. timing features + per-decile curves
+python narrative_arcs.py                              # 12. cluster tension shapes into archetypes
+python export_web.py                                  # 13. static JSON -> web/public/data/
 
 python evaluate_lenses.py     # optional: score recommendation channels vs co-rating truth
 python evaluate_axes.py       # optional: score axes vs the hand-labeled validation set
@@ -79,6 +83,31 @@ both have to move the right way.
 
 Held-out test, hand-tuned → learned: levity .825 → **.855**, threat .809 → **.876**,
 intimacy .691 → **.756**.
+
+### Narrative arcs
+
+Every other signal here reduces a film to a point. Subtitle *timing* gives something
+tags and plot summaries can't: how a film moves. A thriller that ratchets steadily and
+one that explodes in the last act score identically on the threat axis and feel nothing
+alike.
+
+`fetch_subtitles.py` reads the OPUS OpenSubtitles corpus — a single 25GB ZIP64 archive
+with no per-movie objects — over HTTP range requests: locate the central directory, pull
+just that (~70MB), then fetch only the members whose path carries an IMDb id we have.
+390MB transferred instead of 25GB, joined exactly on `imdb_id`.
+
+`narrative_arcs.py` builds a tension curve per decile of runtime (silence and distress
+vocabulary up, chatter down), z-normalizes so clustering keys on *shape* rather than
+loudness, and k-means clusters it into six archetypes — Slow burn, Third-act climax,
+Twin peaks, Cold open, Double climax, Midpoint + finale. Shown as a sparkline in the
+detail panel. Related prior work: Reagan et al. found six shapes in books; a later study
+reported the same on ~6k movie scripts. This does it on subtitle timing, which covers
+far more films than scripts do.
+
+The 18 scalar subtitle features were also tested as axis inputs and **measured not to
+help** (+0.002–0.005 CV, −0.001–0.005 on held-out test — selection noise), so they're
+off by default behind `train_axes.py --with-subs`. The arcs are a separate product
+feature and don't depend on that result.
 
 ## Running the web app
 

@@ -95,6 +95,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=None,
                         help="force a model instead of picking by CV")
+    parser.add_argument("--with-subs", action="store_true",
+                        help="include subtitle features (measured not to help)")
     parser.add_argument("--out", default=str(DATA_DIR / "axes_learned.npy"))
     args = parser.parse_args()
 
@@ -109,11 +111,33 @@ def main() -> None:
 
     genome_all = knn_impute(emb, genome, genome_rows, n)
     review_all = knn_impute(emb, review_emb, review_rows, n)
+    base = np.hstack([genome_all, emb, review_all])
     X = {
         "ridge_genome": genome_all,
-        "ridge_all": np.hstack([genome_all, emb, review_all]),
-        "gbm": np.hstack([genome_all, emb, review_all]),
+        "ridge_all": base,
+        "gbm": base,
     }
+
+    # Subtitle timing features. MEASURED NEGATIVE, off by default: they gain
+    # +0.002..0.005 cv_rho but *lose* 0.001..0.005 on the held-out test on
+    # every axis — CV selection noise, not signal. With 279 labels, 18 extra
+    # features can't demonstrate value, and the genome plus embeddings
+    # already carry whatever they'd contribute. Kept behind a flag so the
+    # result is reproducible rather than just asserted. (The per-decile arcs
+    # they also produce are a separate product feature and don't depend on
+    # this being useful for scoring — see narrative_arcs.py.)
+    sub_path = DATA_DIR / "sub_features.npy"
+    if args.with_subs and sub_path.exists():
+        subs = np.load(sub_path)
+        sub_rows = json.loads((DATA_DIR / "sub_rows.json").read_text())
+        subs = np.nan_to_num(subs, nan=0.0, posinf=0.0, neginf=0.0)
+        subs_all = knn_impute(emb, subs, sub_rows, n)
+        has_sub = np.zeros((n, 1), dtype=np.float32)
+        has_sub[sub_rows] = 1.0  # let the model discount borrowed rows
+        X["ridge_subs"] = np.hstack([base, subs_all, has_sub])
+        X["gbm_subs"] = X["ridge_subs"]
+        print(f"subtitle features: {subs.shape[1]} dims, "
+              f"{len(sub_rows)}/{n} movies covered")
 
     train = json.loads((PIPELINE_DIR / "axis_labels_train.json").read_text())["labels"]
     test = json.loads((PIPELINE_DIR / "axis_labels.json").read_text())["labels"]
@@ -127,7 +151,7 @@ def main() -> None:
           f"({te_cov.sum()} genome-covered, {(~te_cov).sum()} uncovered)\n")
 
     def build(kind, alpha=None):
-        if kind == "gbm":
+        if kind.startswith("gbm"):
             return HistGradientBoostingRegressor(
                 max_depth=3, max_iter=300, learning_rate=0.06, random_state=SEED)
         return Ridge(alpha=alpha)
@@ -137,8 +161,9 @@ def main() -> None:
     for a, axis in enumerate(AXIS_NAMES):
         print(f"[{axis}]")
         best = (None, -np.inf, None)
-        for kind in (["ridge_genome", "ridge_all", "gbm"] if not args.model
-                     else [args.model]):
+        candidates = [k for k in ["ridge_genome", "ridge_all", "gbm",
+                                  "ridge_subs", "gbm_subs"] if k in X]
+        for kind in (candidates if not args.model else [args.model]):
             feats = X[kind]
             sc = StandardScaler().fit(feats[tr_idx])
             Xtr = sc.transform(feats[tr_idx])

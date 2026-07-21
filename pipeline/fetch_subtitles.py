@@ -82,7 +82,9 @@ def parse_central_directory(buf, wanted):
     out = {}
     pos = 0
     n = len(buf)
-    pat = re.compile(r"/(\d{4})/(\d+)/[^/]+\.xml\.gz$")
+    # OpenSubtitles/xml/en/<year>/<imdb_id>/<file_id>.xml — members are plain
+    # XML deflated by the zip itself, with no inner gzip layer.
+    pat = re.compile(r"/(\d{4})/(\d+)/[^/]+\.xml$")
     while pos + 46 <= n:
         if buf[pos:pos + 4] != CD_ENTRY:
             break
@@ -134,11 +136,8 @@ def fetch_member(session, ent):
     nl, el = struct.unpack_from("<HH", head, 26)
     data = get_range(session, ent["off"] + 30 + nl + el, ent["comp"])
     if ent["method"] == 0:
-        raw = data
-    else:
-        raw = zlib.decompress(data, -zlib.MAX_WBITS)
-    # Members are themselves gzipped .xml.gz
-    return zlib.decompress(raw, 16 + zlib.MAX_WBITS)
+        return data
+    return zlib.decompress(data, -zlib.MAX_WBITS)
 
 
 def main() -> None:
@@ -179,19 +178,34 @@ def main() -> None:
         SUBS_DIR.mkdir(parents=True, exist_ok=True)
         todo = [(k, v) for k, v in index.items()
                 if not (SUBS_DIR / f"{imdb[k]}.xml").exists()]
+        cached = len(index) - len(todo)
         if args.limit:
             todo = todo[: args.limit]
-        print(f"{len(todo)} to fetch ({len(index) - len(todo)} already cached)")
+        print(f"{len(todo)} to fetch ({cached} already cached)")
+
+        # Range requests are independent, so fetch a handful at a time —
+        # serial runs at ~1/s, which is an hour for the full set. Kept modest
+        # to stay polite to a free academic mirror.
+        from concurrent.futures import ThreadPoolExecutor
+
         bytes_got = 0
-        for k, ent in tqdm(todo, desc="subs"):
+
+        def one(item):
+            k, ent = item
+            s = requests.Session()
             try:
-                xml = fetch_member(session, ent)
-            except Exception as e:  # keep going; one bad member isn't fatal
+                xml = fetch_member(s, ent)
+            except Exception as e:  # one bad member shouldn't kill the run
                 tqdm.write(f"  skip {k}: {type(e).__name__} {e}")
-                continue
+                return 0
             if xml:
                 (SUBS_DIR / f"{imdb[k]}.xml").write_bytes(xml)
-                bytes_got += ent["comp"]
+                return ent["comp"]
+            return 0
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for got in tqdm(pool.map(one, todo), total=len(todo), desc="subs"):
+                bytes_got += got
         print(f"transferred ~{bytes_got/1e6:.0f} MB")
 
 

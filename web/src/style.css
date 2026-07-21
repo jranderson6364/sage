@@ -412,6 +412,48 @@ body.ready #attribution {
   padding-top: 2px;
 }
 
+/* ---- narrative arc sparkline ---- */
+
+.arc {
+  margin-bottom: 14px;
+}
+
+.arc svg {
+  display: block;
+  width: 100%;
+  height: 34px;
+  overflow: visible;
+}
+
+.arc polygon {
+  fill: color-mix(in srgb, var(--crimson) 14%, transparent);
+}
+
+.arc polyline {
+  fill: none;
+  stroke: var(--crimson);
+  stroke-width: 1.25;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.arc-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--ink-low);
+  padding-top: 4px;
+}
+
+.arc-label span:first-child {
+  color: var(--ink-mid);
+  text-transform: uppercase;
+}
+
 /* ---- tag chips ---- */
 
 .chips {

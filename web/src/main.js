@@ -6,6 +6,7 @@ const POSTER_BASE = "https://image.tmdb.org/t/p/w342";
 const state = {
   movies: [],
   tagNames: [],
+  arcTypes: [],
   selected: null, // movie index (string) or null
   highlighted: new Set(),
   filters: {
@@ -119,6 +120,29 @@ function sharedTags(a, b, n = 3) {
     .map(([t]) => state.tagNames[t]);
 }
 
+// The tension curve over runtime, from subtitle timing (silence and distress
+// vocabulary up, chatter down). Drawn as a filled sparkline: left edge is the
+// opening, right edge the finale.
+function arcSparkline(m) {
+  if (!m.arc) return "";
+  const w = 268, h = 34, pad = 3;
+  const lo = Math.min(...m.arc), hi = Math.max(...m.arc);
+  const span = Math.max(hi - lo, 0.001);
+  const pts = m.arc.map((v, i) => {
+    const x = pad + (i / (m.arc.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((v - lo) / span) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const label = state.arcTypes[m.arcType] ?? "";
+  return `<div class="arc">
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+      <polygon points="${pad},${h} ${pts.join(" ")} ${w - pad},${h}" />
+      <polyline points="${pts.join(" ")}" />
+    </svg>
+    <div class="arc-label"><span>${escapeHtml(label)}</span><span>tension · start → end</span></div>
+  </div>`;
+}
+
 function renderDetail(idx) {
   const m = state.movies[idx];
   const el = document.getElementById("detail-body");
@@ -166,6 +190,7 @@ function renderDetail(idx) {
     <p class="meta">${m.year ?? "—"} · ${m.genres.join(", ")}${directors}
       · ★ ${m.rating.toFixed(1)}</p>
     ${axisReadout}
+    ${arcSparkline(m)}
     ${chips}
     <p class="overview">${escapeHtml(m.overview)}</p>
     <h3>${heading}${steering && steer.loading ? " (loading…)" : ""}</h3>
@@ -345,6 +370,7 @@ async function main() {
   const data = await resp.json();
   state.movies = data.movies;
   state.tagNames = data.tags;
+  state.arcTypes = data.arcTypes ?? [];
   steer.rows = data.genome_rows;
   data.genome_rows.forEach((mi, r) => steer.rowOf.set(mi, r));
 

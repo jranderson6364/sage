@@ -133,6 +133,13 @@ def main() -> None:
         top = sorted(scores.items(), key=lambda kv: -kv[1])[: args.k]
         return [j for j, _ in top]
 
+    # Narrative arcs (narrative_arcs.py) — optional; absent until subtitles
+    # have been fetched and clustered.
+    arcs_path = DATA_DIR / "arcs.json"
+    arcs = json.loads(arcs_path.read_text(encoding="utf-8")) if arcs_path.exists() else None
+    if arcs:
+        print(f"arcs cover {len(arcs['movies'])} / {len(movies)} movies")
+
     nodes = []
     for i, row in movies.iterrows():
         nodes.append({
@@ -150,6 +157,10 @@ def main() -> None:
             "nn": fuse(i),
             "tags": movie_tags.get(i, []),
         })
+        if arcs and str(i) in arcs["movies"]:
+            a = arcs["movies"][str(i)]
+            nodes[-1]["arc"] = a["arc"]
+            nodes[-1]["arcType"] = a["type"]
 
     WEB_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -174,6 +185,7 @@ def main() -> None:
             "movies": nodes,
             "tags": tag_names,
             "genome_rows": genome_rows,
+            "arcTypes": arcs["archetypes"] if arcs else [],
         }, separators=(",", ":"), ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
     )
