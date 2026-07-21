@@ -39,11 +39,18 @@ Usage:
     python semantic_axes.py
 """
 
+import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+# Movie titles carry glyphs (fractions, accents, CJK) that the default
+# Windows console codepage can't encode — without this the run dies partway
+# through on whichever title happens to surface in a report.
+sys.stdout.reconfigure(encoding="utf-8")
 
 DATA_DIR = Path(__file__).parent / "data"
 MODEL = "all-MiniLM-L6-v2"  # must match embed_text.py / embed_reviews.py
@@ -139,7 +146,55 @@ def pct(v: float) -> int:
     return int(round((v + 1) / 2 * 100))
 
 
+def impute_genome(emb, genome, genome_rows, n, k, power):
+    """Borrow a tag profile for movies the tag genome doesn't cover.
+
+    A movie with no community tags falls back to text+review anchors alone,
+    which is measurably the weakest configuration (see evaluate_axes.py).
+    Here each uncovered movie takes a similarity-weighted blend of its k
+    nearest *covered* movies in story-embedding space.
+
+    The obvious hazard is regression to the mean: averaging neighbors yields
+    a blander profile than any real one, which would quietly pull genuinely
+    extreme films toward the middle. `power` sharpens the weights so the
+    closest neighbor dominates instead of the blend smearing across all k --
+    watch evaluate_axes.py's `sep` column, not just rho, when tuning it.
+
+    Returns (genome_all, imputed_mask).
+    """
+    covered = np.asarray(genome_rows)
+    is_cov = np.zeros(n, dtype=bool)
+    is_cov[covered] = True
+    uncovered = np.flatnonzero(~is_cov)
+
+    genome_all = np.zeros((n, genome.shape[1]), dtype=np.float32)
+    genome_all[covered] = genome
+
+    sim = emb[uncovered] @ emb[covered].T
+    top = np.argpartition(-sim, k, axis=1)[:, :k]
+    rows = np.arange(len(uncovered))[:, None]
+    w = np.clip(sim[rows, top], 0, None) ** power
+    w /= np.maximum(w.sum(axis=1, keepdims=True), 1e-12)
+    genome_all[uncovered] = np.einsum("ik,ikd->id", w, genome[top])
+
+    return genome_all, ~is_cov
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    # Imputation is on by default: it lifts uncovered-movie accuracy hugely
+    # (threat rho 0.394 -> 0.748) without flattening the extremes. --no-impute
+    # reproduces the pre-imputation scoring for comparison.
+    parser.add_argument("--no-impute", dest="impute", action="store_false",
+                        help="don't give genome-uncovered movies a borrowed tag profile")
+    parser.add_argument("--impute-k", type=int, default=10)
+    parser.add_argument("--impute-power", type=float, default=5.0,
+                        help="sharpen neighbor weights; higher = less averaging")
+    parser.add_argument("--impute-weight", type=float, default=1.0,
+                        help="scale the genome weight for imputed rows (0-1)")
+    parser.add_argument("--out", default=str(DATA_DIR / "axes.npy"))
+    args = parser.parse_args()
+
     emb = np.load(DATA_DIR / "text_emb.npy")
     movies = pd.read_parquet(DATA_DIR / "movies.parquet")
     n = len(emb)
@@ -155,7 +210,23 @@ def main() -> None:
     review_pos = {row: i for i, row in enumerate(review_rows)}
     print(f"genome covers {len(genome_rows)}/{n} movies, "
           f"reviews cover {len(review_rows)}/{n} movies, "
-          f"overlap {len(set(genome_rows) & set(review_rows))}\n")
+          f"overlap {len(set(genome_rows) & set(review_rows))}")
+
+    # Per-movie genome weight: 0 where we have no tag profile at all.
+    gweight = np.zeros(n)
+    gweight[genome_rows] = GENOME_WEIGHT
+    if args.impute:
+        genome_all, imputed = impute_genome(
+            emb, genome, genome_rows, n, args.impute_k, args.impute_power)
+        gweight[imputed] = GENOME_WEIGHT * args.impute_weight
+        print(f"imputed tag profiles for {imputed.sum()} movies "
+              f"(k={args.impute_k}, power={args.impute_power}, "
+              f"weight x{args.impute_weight})")
+    else:
+        genome_all = np.zeros((n, genome.shape[1]), dtype=np.float32)
+        genome_all[genome_rows] = genome
+    has_g = gweight > 0
+    print()
 
     from sentence_transformers import SentenceTransformer  # slow import
 
@@ -172,20 +243,21 @@ def main() -> None:
         g_pos, g_neg = GENOME_TAGS[name]
         pos_i = [tag_idx[t] for t in g_pos if t in tag_idx]
         neg_i = [tag_idx[t] for t in g_neg if t in tag_idx]
-        g_raw = genome[:, pos_i].sum(axis=1)
+        g_raw = genome_all[has_g][:, pos_i].sum(axis=1)
         if neg_i:
-            g_raw = g_raw - genome[:, neg_i].sum(axis=1)
-        g_rank = rank01(g_raw)
+            g_raw = g_raw - genome_all[has_g][:, neg_i].sum(axis=1)
+        # Ranked within the set that actually has a profile, then scattered
+        # back — movies with no profile must not be ranked as "zero tags".
+        g_rank = np.zeros(n)
+        g_rank[has_g] = rank01(g_raw)
 
         review_rank = rank01(review_emb @ direction)
 
         # Weighted sum over whichever channels each movie actually has,
         # renormalized by the weight actually used (so e.g. a movie with
         # only text still lands on a plain 0-1 rank, not a fraction of one).
-        weighted_sum = TEXT_WEIGHT * text_rank
-        weight_used = np.full(n, TEXT_WEIGHT)
-        weighted_sum[genome_rows] += GENOME_WEIGHT * g_rank
-        weight_used[genome_rows] += GENOME_WEIGHT
+        weighted_sum = TEXT_WEIGHT * text_rank + gweight * g_rank
+        weight_used = TEXT_WEIGHT + gweight
         weighted_sum[review_rows] += REVIEW_WEIGHT * review_rank
         weight_used[review_rows] += REVIEW_WEIGHT
         blended = weighted_sum / weight_used
@@ -205,7 +277,9 @@ def main() -> None:
         overlap = sorted(set(genome_rows) & set(review_rows))
         if overlap:
             spread = [
-                (row, g_rank[genome_pos[row]], review_rank[review_pos[row]], text_rank[row])
+                # g_rank is full-length and scattered; review_rank is still
+                # indexed by position within the review subset.
+                (row, g_rank[row], review_rank[review_pos[row]], text_rank[row])
                 for row in overlap
             ]
             spread.sort(key=lambda t: -(max(t[1:]) - min(t[1:])))
@@ -229,8 +303,8 @@ def main() -> None:
             print(f"  {label:40} levity {pct(scores[i, 0]):3d} · "
                   f"threat {pct(scores[i, 1]):3d} · intimacy {pct(scores[i, 2]):3d}")
 
-    np.save(DATA_DIR / "axes.npy", scores)
-    print(f"\nWrote {scores.shape} axis scores -> data/axes.npy")
+    np.save(args.out, scores)
+    print(f"\nWrote {scores.shape} axis scores -> {args.out}")
 
 
 if __name__ == "__main__":

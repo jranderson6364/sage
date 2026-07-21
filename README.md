@@ -52,7 +52,14 @@ python semantic_axes.py                               # 8. levity/threat/intimac
 python export_web.py                                  # 9. static JSON -> web/public/data/
 
 python evaluate_lenses.py     # optional: score recommendation channels vs co-rating truth
+python evaluate_axes.py       # optional: score axes vs the hand-labeled validation set
 ```
+
+`evaluate_axes.py` is the guard rail for axis changes: it reports Spearman
+correlation against `axis_labels.json` (104 hand-scored movies), split by tag-genome
+coverage, plus `sep` — the percentile gap between films labeled extreme-low and
+extreme-high. A change that raises correlation while shrinking `sep` is flattening the
+cloud toward the middle rather than improving it, so both need to move the right way.
 
 ## Running the web app
 
