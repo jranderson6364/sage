@@ -127,13 +127,26 @@ CHECKS = [
     "Get Out", "Amelie",
 ]
 
-# Base weights when all three signals are available; renormalized per movie
-# over whichever channels it actually has. Chosen so that GENOME_WEIGHT and
-# TEXT_WEIGHT alone (review absent, the pre-review behavior) renormalize
-# back to the original 0.65 / 0.35 split exactly.
-GENOME_WEIGHT = 0.455
-REVIEW_WEIGHT = 0.3
-TEXT_WEIGHT = 0.245
+# Channel weights, per axis, as (genome, review, text). Renormalized per
+# movie over whichever channels it actually has.
+#
+# These differ by axis on purpose, and the split is mechanical rather than
+# fitted noise: reviews and plot summaries describe comedy accurately
+# (people write "hilarious"), so levity can lean on them — but for tension
+# and relationships they describe craft, legacy and premise instead. The
+# diagnostic case is Jurassic Park, whose genome tags correctly fire
+# tense/suspense/scary while its reviews (wonder, nostalgia, effects) and
+# its overview (a theme park) read as playful and safe, dragging threat
+# down to the 36th percentile.
+#
+# Leaning this hard on genome only became safe once imputation gave every
+# movie a tag profile; before that, a heavy genome weight would have
+# stranded the ~20% with no tags. Sweeps: see evaluate_axes.py.
+CHANNEL_WEIGHTS = {
+    "levity": (0.50, 0.28, 0.22),
+    "threat": (0.75, 0.14, 0.11),
+    "intimacy": (0.78, 0.12, 0.10),
+}
 
 
 def rank01(x: np.ndarray) -> np.ndarray:
@@ -192,6 +205,11 @@ def main() -> None:
                         help="sharpen neighbor weights; higher = less averaging")
     parser.add_argument("--impute-weight", type=float, default=1.0,
                         help="scale the genome weight for imputed rows (0-1)")
+    # Experiment overrides: if given, these replace CHANNEL_WEIGHTS for
+    # every axis, so a sweep can test one global setting.
+    parser.add_argument("--gw", type=float, help="override genome weight (all axes)")
+    parser.add_argument("--rw", type=float, help="override review weight (all axes)")
+    parser.add_argument("--tw", type=float, help="override text weight (all axes)")
     parser.add_argument("--out", default=str(DATA_DIR / "axes.npy"))
     args = parser.parse_args()
 
@@ -212,20 +230,20 @@ def main() -> None:
           f"reviews cover {len(review_rows)}/{n} movies, "
           f"overlap {len(set(genome_rows) & set(review_rows))}")
 
-    # Per-movie genome weight: 0 where we have no tag profile at all.
-    gweight = np.zeros(n)
-    gweight[genome_rows] = GENOME_WEIGHT
+    # Which movies have a tag profile at all (real or borrowed).
+    has_g = np.zeros(n, dtype=bool)
+    has_g[genome_rows] = True
     if args.impute:
         genome_all, imputed = impute_genome(
             emb, genome, genome_rows, n, args.impute_k, args.impute_power)
-        gweight[imputed] = GENOME_WEIGHT * args.impute_weight
+        has_g |= imputed
         print(f"imputed tag profiles for {imputed.sum()} movies "
               f"(k={args.impute_k}, power={args.impute_power}, "
               f"weight x{args.impute_weight})")
     else:
         genome_all = np.zeros((n, genome.shape[1]), dtype=np.float32)
         genome_all[genome_rows] = genome
-    has_g = gweight > 0
+        imputed = np.zeros(n, dtype=bool)
     print()
 
     from sentence_transformers import SentenceTransformer  # slow import
@@ -234,6 +252,15 @@ def main() -> None:
 
     scores = np.empty((n, len(AXES)), dtype=np.float32)
     for col, (name, (pos, neg)) in enumerate(AXES.items()):
+        gw, rw, tw = CHANNEL_WEIGHTS[name]
+        if args.gw is not None: gw = args.gw
+        if args.rw is not None: rw = args.rw
+        if args.tw is not None: tw = args.tw
+        # Imputed profiles are borrowed, not observed, so they can be
+        # discounted relative to real ones via --impute-weight.
+        gweight = np.zeros(n)
+        gweight[has_g] = gw
+        gweight[imputed] = gw * args.impute_weight
         anchors = model.encode(pos + neg, normalize_embeddings=True)
         direction = anchors[: len(pos)].mean(axis=0) - anchors[len(pos):].mean(axis=0)
         direction /= np.linalg.norm(direction)
@@ -256,10 +283,10 @@ def main() -> None:
         # Weighted sum over whichever channels each movie actually has,
         # renormalized by the weight actually used (so e.g. a movie with
         # only text still lands on a plain 0-1 rank, not a fraction of one).
-        weighted_sum = TEXT_WEIGHT * text_rank + gweight * g_rank
-        weight_used = TEXT_WEIGHT + gweight
-        weighted_sum[review_rows] += REVIEW_WEIGHT * review_rank
-        weight_used[review_rows] += REVIEW_WEIGHT
+        weighted_sum = tw * text_rank + gweight * g_rank
+        weight_used = tw + gweight
+        weighted_sum[review_rows] += rw * review_rank
+        weight_used[review_rows] += rw
         blended = weighted_sum / weight_used
 
         scores[:, col] = rank01(blended) * 2 - 1
@@ -267,7 +294,8 @@ def main() -> None:
         order = np.argsort(scores[:, col])
         top = movies["title"].iloc[order[-5:][::-1]].tolist()
         bottom = movies["title"].iloc[order[:5]].tolist()
-        print(f"[{name}: {len(pos_i)}+{len(neg_i)} genome tags matched]")
+        print(f"[{name}: {len(pos_i)}+{len(neg_i)} genome tags matched, "
+              f"weights g{gw}/r{rw}/t{tw}]")
         print(f"most {name}:  {', '.join(top)}")
         print(f"least {name}: {', '.join(bottom)}")
 
