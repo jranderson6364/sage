@@ -55,9 +55,16 @@ def main() -> None:
     idx = np.array([int(k) for k in labels])
     truth = np.array([labels[k] for k in labels], dtype=float)  # n x 3, 1..10
     is_cov = np.array([i in genome_rows for i in idx])
-    # Model scores live in [-1, 1] as percentiles; put them on 0..100 so the
-    # tail error is readable as "percentile points off".
-    pred = (scores[idx] + 1) / 2 * 100
+    # Convert to within-catalog percentile before measuring spread. Some
+    # scorers emit forced-uniform percentiles and some emit a predicted 1-10
+    # rating, and raw spreads across those two parameterizations aren't
+    # comparable — ranking first makes `sep` mean the same thing either way.
+    ranked = np.empty_like(scores, dtype=float)
+    for a in range(scores.shape[1]):
+        r = np.empty(len(scores))
+        r[np.argsort(scores[:, a], kind="stable")] = np.arange(len(scores))
+        ranked[:, a] = (r + 0.5) / len(scores) * 100
+    pred = ranked[idx]
 
     print(f"{len(idx)} labeled movies "
           f"({is_cov.sum()} genome-covered, {(~is_cov).sum()} uncovered)")

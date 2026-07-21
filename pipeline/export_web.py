@@ -69,11 +69,19 @@ def truncate(text: str | None, limit: int) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--k", type=int, default=10, help="neighbors per movie")
+    parser.add_argument("--axes", default=None,
+                        help="axis scores to ship (default: learned, else hand-tuned)")
     args = parser.parse_args()
 
     movies = pd.read_parquet(DATA_DIR / "movies.parquet")
     text_emb = np.load(DATA_DIR / "text_emb.npy")
-    axes = np.load(DATA_DIR / "axes.npy")  # levity, threat, intimacy (semantic_axes.py)
+    # Prefer the fitted axes (train_axes.py) over the hand-tuned scorer;
+    # semantic_axes.py's output stays the fallback and the comparison point.
+    axes_path = Path(args.axes) if args.axes else (
+        DATA_DIR / "axes_learned.npy" if (DATA_DIR / "axes_learned.npy").exists()
+        else DATA_DIR / "axes.npy")
+    axes = np.load(axes_path)  # levity, threat, intimacy
+    print(f"axes: {axes_path.name}")
     assert len(movies) == len(text_emb) == len(axes)
 
     nn_text = top_k_cosine(text_emb, FUSE_K)
