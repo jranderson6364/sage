@@ -197,7 +197,15 @@ def main() -> None:
         print(f"subtitle features: {subs.shape[1]} dims, "
               f"{len(sub_rows)}/{n} movies covered")
 
-    train = json.loads((PIPELINE_DIR / "axis_labels_train.json").read_text())["labels"]
+    # Training labels accumulate across batches; the held-out test set is
+    # never merged in. Later batches win on the (currently impossible)
+    # chance of a duplicate key.
+    train = {}
+    for name in ["axis_labels_train.json", "axis_labels_batch1.json",
+                 "axis_labels_batch2.json"]:
+        p = PIPELINE_DIR / name
+        if p.exists():
+            train.update(json.loads(p.read_text())["labels"])
     test = json.loads((PIPELINE_DIR / "axis_labels.json").read_text())["labels"]
     tr_idx = np.array([int(k) for k in train])
     te_idx = np.array([int(k) for k in test])
