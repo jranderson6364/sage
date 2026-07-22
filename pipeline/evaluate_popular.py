@@ -48,7 +48,18 @@ def main() -> None:
 
     idx = np.array([int(k) for k in labels])
     truth = np.array([labels[k] for k in labels], dtype=float)   # already 0-100
-    pred = (scores[idx] + 1) / 2 * 100                            # as displayed
+
+    # Compare against percentile rank, which is what the detail panel shows.
+    # Do NOT use (v+1)/2*100 here: the display transform stretches the tails
+    # past ±1, so that mapping overflows 0-100 and inflates the error for
+    # every extreme film — it reported a phantom MAE regression of ~3 points
+    # with the model's ordering completely unchanged.
+    pct = np.empty_like(scores, dtype=float)
+    for a in range(scores.shape[1]):
+        r = np.empty(len(scores))
+        r[np.argsort(scores[:, a], kind="stable")] = np.arange(len(scores))
+        pct[:, a] = (r + 0.5) / len(scores) * 100
+    pred = pct[idx]
     err = pred - truth
 
     print(f"{len(idx)} popular films · axes: {Path(args.axes).name}\n")
