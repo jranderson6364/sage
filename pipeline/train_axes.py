@@ -202,7 +202,7 @@ def main() -> None:
     # chance of a duplicate key.
     train = {}
     for name in ["axis_labels_train.json", "axis_labels_batch1.json",
-                 "axis_labels_batch2.json"]:
+                 "axis_labels_batch2.json", "axis_labels_batch3.json", "axis_labels_batch4.json"]:
         p = PIPELINE_DIR / name
         if p.exists():
             train.update(json.loads(p.read_text())["labels"])
