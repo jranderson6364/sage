@@ -1,7 +1,7 @@
 {
   "_about": "Labels sourced directly from the project owner, who has seen these films. Same 1-10 rubric. These take precedence over Claude-inferred labels because they come from someone who actually watched the movie. Values are [levity, threat, intimacy].",
   "labels": {
-    "1729": [2, 9, 8],
+    "1729": [2, 9, 9],
     "4267": [3, 8, 5]
   }
 }

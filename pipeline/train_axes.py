@@ -301,6 +301,22 @@ def main() -> None:
         print()
 
     scores = np.stack([preds_all[a] for a in AXIS_NAMES], axis=1)
+
+    # Owner overrides are authoritative, not just another training point.
+    # Ridge (alpha=1000) barely moves one film toward one label, so a film the
+    # owner has actually seen and rated stayed pinned near what its features
+    # predict (Obsession labeled [2,9,8] landed T71/I52). Both the raw model
+    # output and the owner rubric are on the same 1-10 scale, so overwriting
+    # the raw score here — before rank-normalization — makes the owner's rating
+    # place the film directly: a threat 9 lands near the top because almost no
+    # film predicts 9. Everything else is still the learned model.
+    user_path = PIPELINE_DIR / "axis_labels_user.json"
+    if user_path.exists():
+        user = json.loads(user_path.read_text())["labels"]
+        for k, vals in user.items():
+            scores[int(k)] = vals
+        print(f"applied {len(user)} owner overrides")
+
     print("predicted label-scale distribution (1-10):")
     for a, axis in enumerate(AXIS_NAMES):
         c = scores[:, a]
