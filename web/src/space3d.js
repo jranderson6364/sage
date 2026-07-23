@@ -49,33 +49,55 @@ function moodColor(m) {
   ];
 }
 
+// glow: 0 = ordinary, 0.5 = neighbor of the selection, 1 = the selected film.
+// uTime (seconds) drives a slow shared pulse so selected/neighbor stars
+// breathe and brighten in sync.
 const VERT = /* glsl */ `
   attribute float size;
   attribute vec3 pointColor;
+  attribute float glow;
+  uniform float uTime;
   varying vec3 vColor;
+  varying float vGlow;
   void main() {
     vColor = pointColor;
+    vGlow = glow;
     if (size <= 0.0) {
       // Filtered out: GPUs clamp gl_PointSize 0 to a 1px dot, so move the
       // vertex outside clip space instead of relying on a zero size.
       gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
       gl_PointSize = 0.0;
     } else {
+      // Glowing stars breathe: selected ~±11%, neighbors ~±5.5%.
+      float breathe = 1.0 + glow * 0.11 * sin(uTime * 1.4);
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      gl_PointSize = size * (520.0 / -mv.z);
+      gl_PointSize = size * breathe * (520.0 / -mv.z);
       gl_Position = projectionMatrix * mv;
     }
   }
 `;
 
 const FRAG = /* glsl */ `
+  uniform float uTime;
   varying vec3 vColor;
+  varying float vGlow;
   void main() {
     vec2 c = gl_PointCoord - 0.5;
     float d = length(c);
     if (d > 0.5) discard;
-    float a = smoothstep(0.5, 0.4, d);
-    gl_FragColor = vec4(vColor, a * 0.92);
+
+    // Slow shared pulse, 0..1, ~4.5s period.
+    float pulse = 0.5 + 0.5 * sin(uTime * 1.4);
+    // Brighten glowing stars in their own hue (selected harder than neighbors),
+    // with the pulse riding on top.
+    float lift = vGlow * (0.7 + 0.6 * pulse);
+    vec3 rgb = vColor * (1.0 + lift);
+
+    float core = smoothstep(0.5, 0.4, d);
+    // Soft halo only around glowing stars, so the selection reads as a bloom.
+    float halo = vGlow * smoothstep(0.5, 0.02, d) * (0.22 + 0.18 * pulse);
+    float a = core * 0.92 + halo;
+    gl_FragColor = vec4(rgb, clamp(a, 0.0, 0.98));
   }
 `;
 
@@ -118,6 +140,7 @@ export class Space3D {
     const pos = new Float32Array(n * 3);
     const col = new Float32Array(n * 3);
     const size = new Float32Array(n);
+    const glow = new Float32Array(n); // 0 until a selection is made
     this.baseColors = new Float32Array(n * 3);
     movies.forEach((m, i) => {
       pos.set([m.levity, m.threat, m.intimacy], i * 3);
@@ -133,15 +156,15 @@ export class Space3D {
     geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     geo.setAttribute("pointColor", new THREE.BufferAttribute(col, 3));
     geo.setAttribute("size", new THREE.BufferAttribute(size, 1));
-    this.points = new THREE.Points(
-      geo,
-      new THREE.ShaderMaterial({
-        vertexShader: VERT,
-        fragmentShader: FRAG,
-        transparent: true,
-        depthWrite: false,
-      })
-    );
+    geo.setAttribute("glow", new THREE.BufferAttribute(glow, 1));
+    this.pointMaterial = new THREE.ShaderMaterial({
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      transparent: true,
+      depthWrite: false,
+      uniforms: { uTime: { value: 0 } },
+    });
+    this.points = new THREE.Points(geo, this.pointMaterial);
     this.scene.add(this.points);
 
     // Axis guide lines through the origin.
@@ -187,6 +210,9 @@ export class Space3D {
     // showing a hover tooltip there would just flicker mid-orbit. Tap still
     // picks via pointerdown/up regardless; touch users see detail on tap.
     this.isCoarsePointer = window.matchMedia("(pointer: coarse)").matches;
+    // Respect reduced-motion: no auto-orbit, no pulse. Selected stars still
+    // brighten and swell — that's static, not motion — they just hold steady.
+    this.reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const canvas = this.renderer.domElement;
     canvas.addEventListener("pointerdown", (e) => {
@@ -245,6 +271,7 @@ export class Space3D {
     const { selected, highlighted, movies } = this.state;
     const col = this.points.geometry.getAttribute("pointColor");
     const size = this.points.geometry.getAttribute("size");
+    const glow = this.points.geometry.getAttribute("glow");
     const selActive = selected !== null && highlighted.size > 1;
 
     let visible = 0;
@@ -253,19 +280,24 @@ export class Space3D {
       const shown = selActive ? hi : this.inFilter(movies[i], i);
       if (!shown) {
         size.array[i] = 0;
+        glow.array[i] = 0;
         continue;
       }
       visible++;
       col.array.set(this.baseColors.subarray(i * 3, i * 3 + 3), i * 3);
+      const isSel = String(i) === selected;
+      // The selected star swells most; its connected stars grow noticeably too.
       size.array[i] = selActive
-        ? this.baseSizes[i] * (String(i) === selected ? 1.7 : 1.25)
+        ? this.baseSizes[i] * (isSel ? 1.9 : 1.45)
         : this.baseSizes[i];
+      // glow drives the shader's brightening + pulse + halo.
+      glow.array[i] = selActive ? (isSel ? 1.0 : 0.5) : 0.0;
     }
     this.visibleCount = visible;
 
     // Idle orbit around the selection — a slow cinematic drift.
-    this.controls.autoRotate = selActive;
-    this.controls.autoRotateSpeed = 0.7;
+    this.controls.autoRotate = selActive && !this.reducedMotion;
+    this.controls.autoRotateSpeed = 0.32;
 
     if (selActive) {
       const sel = movies[Number(selected)];
@@ -282,6 +314,7 @@ export class Space3D {
     }
     col.needsUpdate = true;
     size.needsUpdate = true;
+    glow.needsUpdate = true;
   }
 
   syncSelection() {
@@ -338,6 +371,12 @@ export class Space3D {
       if (t >= 1) this.fly = null;
     }
     this.controls.update();
+
+    // Drive the selection pulse (brightening + breathing + halo in the shader).
+    // Reduced-motion holds uTime at sin=+1 so glowing stars stay bright and
+    // full-size without animating.
+    this.pointMaterial.uniforms.uTime.value =
+      this.reducedMotion ? Math.PI / 2 / 1.4 : performance.now() / 1000;
 
     // Hover: raycast at most once per frame. Skipped on touch (see above).
     if (this.pointerEvent && !this.isCoarsePointer) {
