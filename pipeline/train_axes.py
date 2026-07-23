@@ -136,27 +136,35 @@ def main() -> None:
     review_emb = np.load(DATA_DIR / "review_emb.npy")
     review_rows = json.loads((DATA_DIR / "review_rows.json").read_text())
 
-    # Tried and rejected: dropping format/medium tags (animation, cartoon,
-    # pixar, cgi, franchise...) on the theory that they were suppressing threat
-    # for animated films, since "cartoon" dominates their tag mass. Measured
-    # no effect — popular-100 threat bias -7.0 -> -7.1, MAE 9.13 -> 9.28, The
-    # Lion King 21 -> 23. Removing a misleading tag doesn't supply the missing
-    # one; those films still carry no positive tension signal either way.
-    genome_all = knn_impute(emb, genome, genome_rows, n)
-    review_all = knn_impute(emb, review_emb, review_rows, n)
-
-    # TMDB keywords. Unlike the tag genome these exist for *every* movie,
-    # including releases far too recent for MovieLens to have tagged — and
-    # they're often explicitly tone-bearing ("supernatural horror",
-    # "psychological", "unrequited love"). That matters because the genome is
-    # missing for ~991 films, and a genome-only model scores those entirely
-    # from an imputed, i.e. fabricated, tag vector.
+    # TMDB keywords. Every film has them (unlike the ~991 genome-uncovered
+    # ones), and they name tone plainly — "supernatural horror",
+    # "psychological", "unrequited love". As direct ridge features they only
+    # overfit (944 sparse dims, ~700 labels), but they're decisive for
+    # *imputation*: an uncovered film's tag profile is borrowed from its
+    # nearest neighbors, and finding those neighbors by keyword similarity
+    # instead of overview-text similarity fixes the failure where a film's
+    # premise reads nothing like its tone. Obsession (2026) — Horror with
+    # keywords supernatural/possession/self-harm — has an overview about a
+    # romantic wish, so its text neighbors were romantic fantasies and its
+    # threat imputed near the middle. Its keyword neighbors are horror.
     from sklearn.feature_extraction.text import TfidfVectorizer
-    kw_docs = ["; ".join(k) for k in movies["keywords"]]
-    kw_vec = TfidfVectorizer(analyzer=lambda d: d.split("; "), min_df=25)
-    keywords = kw_vec.fit_transform(kw_docs).toarray().astype(np.float32)
-    print(f"keywords: {keywords.shape[1]} dims (min_df=25), "
-          f"{(keywords.any(axis=1)).sum()}/{n} movies non-empty")
+    from sklearn.preprocessing import normalize
+    kw_docs = ["|".join(k) for k in movies["keywords"]]
+    kw_vec = TfidfVectorizer(analyzer=lambda d: d.split("|"), min_df=5)
+    kw_tfidf = normalize(kw_vec.fit_transform(kw_docs).astype(np.float32)).toarray()
+
+    # Neighbor-finding space for imputation: L2-normalized overview embedding
+    # concatenated with keyword TF-IDF (weight tuned on held-out; 0.7-1.0 is a
+    # flat optimum). Both are unit-normalized so a dot product is the sum of
+    # two cosine similarities. This lifts held-out rho on every axis — most on
+    # uncovered films (threat .826->.864, levity .795->.872) but also overall,
+    # since 42% of the test set is uncovered.
+    KW_WEIGHT = 0.85
+    impute_space = np.hstack([normalize(emb), KW_WEIGHT * kw_tfidf]).astype(np.float32)
+    genome_all = knn_impute(impute_space, genome, genome_rows, n)
+    review_all = knn_impute(impute_space, review_emb, review_rows, n)
+    print(f"keyword-augmented imputation: {kw_tfidf.shape[1]} keyword dims, "
+          f"weight {KW_WEIGHT}")
 
     # Feature blocks kept separable rather than one lump, because the two
     # embedding sources behave very differently per axis: reviews describe how
@@ -170,9 +178,7 @@ def main() -> None:
         "ridge_genome": genome_all,
         "ridge_g+rev": np.hstack([genome_all, review_all]),
         "ridge_g+txt": np.hstack([genome_all, emb]),
-        "ridge_gkw": np.hstack([genome_all, keywords]),
         "ridge_all": base,
-        "ridge_allkw": np.hstack([base, keywords]),
         "gbm": base,
     }
 
@@ -202,7 +208,8 @@ def main() -> None:
     # chance of a duplicate key.
     train = {}
     for name in ["axis_labels_train.json", "axis_labels_batch1.json",
-                 "axis_labels_batch2.json", "axis_labels_batch3.json", "axis_labels_batch4.json"]:
+                 "axis_labels_batch2.json", "axis_labels_batch3.json",
+                 "axis_labels_batch4.json", "axis_labels_user.json"]:
         p = PIPELINE_DIR / name
         if p.exists():
             train.update(json.loads(p.read_text())["labels"])
@@ -229,8 +236,8 @@ def main() -> None:
 
         # Ordered simplest-first; the 1-SE rule below relies on this.
         candidates = [k for k in ["ridge_genome", "ridge_g+rev", "ridge_g+txt",
-                                  "ridge_gkw", "ridge_all", "ridge_allkw",
-                                  "gbm", "ridge_subs", "gbm_subs"] if k in X]
+                                  "ridge_all", "gbm", "ridge_subs", "gbm_subs"]
+                      if k in X]
         scored = []
         for kind in (candidates if not args.model else [args.model]):
             feats = X[kind]
