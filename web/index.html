@@ -40,6 +40,18 @@
     <div id="app">
       <header id="topbar">
         <h1>Sage</h1>
+        <div id="list-picker">
+          <button
+            id="list-button"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="list-menu"
+          >
+            <span id="list-label">All movies</span>
+            <span class="caret" aria-hidden="true">▾</span>
+          </button>
+          <ul id="list-menu" role="menu" hidden></ul>
+        </div>
         <input
           id="search"
           type="search"

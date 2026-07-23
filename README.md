@@ -54,7 +54,8 @@ python fetch_subtitles.py --index                     # 10. index the remote 25G
 python fetch_subtitles.py --fetch                     #     range-fetch only our ~3.7k films (~390MB)
 python subtitle_features.py                           # 11. timing features + per-decile curves
 python narrative_arcs.py                              # 12. cluster tension shapes into archetypes
-python export_web.py                                  # 13. static JSON -> web/public/data/
+python fetch_lists.py                                 # 13. resolve curated lists against the catalogue
+python export_web.py                                  # 14. static JSON -> web/public/data/
 
 python evaluate_lenses.py     # optional: score recommendation channels vs co-rating truth
 python evaluate_axes.py       # optional: score axes vs the hand-labeled validation set
@@ -108,6 +109,31 @@ The 18 scalar subtitle features were also tested as axis inputs and **measured n
 help** (+0.002–0.005 CV, −0.001–0.005 on held-out test — selection noise), so they're
 off by default behind `train_axes.py --with-subs`. The arcs are a separate product
 feature and don't depend on that result.
+
+### Lists
+
+Picking a list ("Best Picture Winners", "Best Romance") scopes the entire app to
+its films — the cloud, the search box, and the recommendations all narrow
+together, and the three mood filters keep working inside that smaller world.
+
+The recommendations are the part that can't be done in the browser. A ~100-film
+list is about 2% of the catalogue, so filtering a movie's global top-10
+neighbours down to list members leaves roughly nothing. Instead `export_web.py`
+re-ranks *every channel* over list members only and fuses them with the same
+weights, so a list is the same recommender looking at a smaller world rather
+than a different one. Selecting Eternal Sunshine of the Spotless Mind under
+"Best Romance" suggests Amélie and Before Sunset; the same film under "Mind
+Benders" suggests Memento and Donnie Darko.
+
+Lists are defined in `pipeline/lists.json`, either as a public TMDB list id or
+as hand-picked `[title, year]` pairs (written that way so the set is auditable
+in review and a typo fails loudly instead of silently resolving to the wrong
+film). `fetch_lists.py` resolves them and reports coverage, which is the number
+that decides what ships: the catalogue is TMDB's top ~5000 by vote count, so
+mainstream lists land near 100% while arthouse-leaning ones barely register
+(measured: Golden Lion 11%, Palme d'Or 30%). Anything under `--min-coverage` is
+dropped rather than shipped as a misleading stub, and a list that made the cut
+but isn't complete says so in the menu ("70 of 99 in catalog").
 
 ## Running the web app
 

@@ -13,6 +13,13 @@ The individual channels are deliberately *not* exported — they exist only to
 feed the fusion. Movie positions come from the axes (levity/threat/intimacy),
 so no 2D layout is exported either.
 
+Curated lists (fetch_lists.py) ship alongside, in lists.json. A list needs its
+own neighbour lists: filtering the global `nn` to members doesn't work, because
+a ~100-film list is ~2% of the catalogue, so a film's global top-10 contains
+roughly zero of them. Instead every channel is re-ranked over list members only
+and fused again through the same `fuse()` with the same weights — so a list is
+the same recommender looking at a smaller world, not a different one.
+
 Each movie also carries its top genome tags ([tag_index, relevance] pairs into
 the top-level "tags" name list) so the UI can explain *why* two movies match
 and drive aspect steering. Neighbor lists hold row indices into the movies
@@ -58,6 +65,39 @@ def top_k_cosine(emb: np.ndarray, k: int) -> np.ndarray:
     rows = np.arange(len(sim))[:, None]
     order = np.argsort(-sim[rows, idx], axis=1)
     return idx[rows, order]
+
+
+def fuse(channels: dict[str, list[int] | None], k: int) -> list[int]:
+    """The recommendation model: weighted RRF over whichever channels exist.
+
+    Channels missing for a movie (no genome coverage, too few ratings for ALS)
+    are simply absent, so it still fuses whatever it does have, down to text
+    alone. Both the global export and the per-list re-ranking go through here —
+    that shared path is what makes a list "the same tool, scoped smaller".
+    """
+    scores: dict[int, float] = {}
+    for channel, ranked in channels.items():
+        if ranked is None:
+            continue
+        w = MASTER_WEIGHTS[channel]
+        for r, j in enumerate(ranked):
+            scores[int(j)] = scores.get(int(j), 0.0) + w / (RRF_K + r + 1)
+    return [j for j, _ in sorted(scores.items(), key=lambda kv: -kv[1])[:k]]
+
+
+def rank_within(members: list[int], emb: np.ndarray, row_of: dict[int, int]) -> dict:
+    """Rank a subset of movies against each other inside one channel's space.
+
+    `row_of` maps a movie index to its row in `emb`; movies the channel doesn't
+    cover are absent from it and drop out here. Returns movie index -> the other
+    members ranked by similarity, or {} when too few members are covered to rank.
+    """
+    covered = [m for m in members if m in row_of]
+    if len(covered) < 2:
+        return {}
+    sub = emb[[row_of[m] for m in covered]]
+    nn = top_k_cosine(sub, min(FUSE_K, len(covered) - 1))
+    return {m: [covered[j] for j in nn[si]] for si, m in enumerate(covered)}
 
 
 def truncate(text: str | None, limit: int) -> str:
@@ -116,22 +156,19 @@ def main() -> None:
     }
     print(f"ALS channel covers {len(covered)} / {len(movies)} movies")
 
-    def fuse(i: int) -> list[int]:
-        """The recommendation: weighted RRF over the available channels."""
-        lists = {
+    # Movie index -> row, per channel. rank_within() uses these to pull the
+    # right sub-matrix when re-ranking a list; text covers everything.
+    text_row_of = {i: i for i in range(len(movies))}
+    genome_row_of = {movie_i: gi for gi, movie_i in enumerate(genome_rows)}
+    als_row_of = {movie_i: factor_row[int(movies["movielens_id"].iat[movie_i])]
+                  for movie_i in covered}
+
+    def fuse_global(i: int) -> list[int]:
+        return fuse({
             "text": nn_text[i],
             "genome": nn_vibe.get(i),
             "als": nn_als.get(i),
-        }
-        scores: dict[int, float] = {}
-        for channel, ranked in lists.items():
-            if ranked is None:
-                continue
-            w = MASTER_WEIGHTS[channel]
-            for r, j in enumerate(ranked):
-                scores[int(j)] = scores.get(int(j), 0.0) + w / (RRF_K + r + 1)
-        top = sorted(scores.items(), key=lambda kv: -kv[1])[: args.k]
-        return [j for j, _ in top]
+        }, args.k)
 
     # Narrative arcs (narrative_arcs.py) — optional; absent until subtitles
     # have been fetched and clustered.
@@ -154,7 +191,7 @@ def main() -> None:
             "levity": round(float(axes[i, 0]), 3),
             "threat": round(float(axes[i, 1]), 3),
             "intimacy": round(float(axes[i, 2]), 3),
-            "nn": fuse(i),
+            "nn": fuse_global(i),
             "tags": movie_tags.get(i, []),
         })
         if arcs and str(i) in arcs["movies"]:
@@ -163,6 +200,46 @@ def main() -> None:
             nodes[-1]["arcType"] = a["type"]
 
     WEB_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Curated lists: each one re-ranks all three channels over its own members
+    # and fuses them with the same weights, so picking a list scopes the
+    # recommender rather than swapping it. Written separately from movies.json
+    # because the app is fully usable before it arrives.
+    lists_path = DATA_DIR / "lists_resolved.json"
+    if lists_path.exists():
+        resolved = json.loads(lists_path.read_text(encoding="utf-8"))
+        out_lists = []
+        for slug, spec in resolved.items():
+            members = spec["rows"]
+            per_channel = {
+                "text": rank_within(members, text_emb, text_row_of),
+                "genome": rank_within(members, genome, genome_row_of),
+                "als": rank_within(members, factors, als_row_of),
+            }
+            nn = {
+                str(m): fuse({c: r.get(m) for c, r in per_channel.items()}, args.k)
+                for m in members
+            }
+            out_lists.append({
+                "slug": slug,
+                "name": spec["name"],
+                "description": spec["description"],
+                "source": spec["source"],
+                "matched": spec["matched"],
+                "total": spec["total"],
+                "members": members,
+                "nn": nn,
+            })
+        lists_out = WEB_DATA_DIR / "lists.json"
+        lists_out.write_text(
+            json.dumps({"lists": out_lists}, separators=(",", ":"),
+                       ensure_ascii=False, allow_nan=False),
+            encoding="utf-8",
+        )
+        print(f"Wrote {len(out_lists)} lists -> {lists_out} "
+              f"({lists_out.stat().st_size / 1e3:.0f} KB)")
+    else:
+        print("No lists_resolved.json — skipping lists (run fetch_lists.py)")
 
     # Quantized genome for client-side aspect steering: the front end
     # re-ranks recommendations after boosting user-picked tag dimensions.

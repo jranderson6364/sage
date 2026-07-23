@@ -9,6 +9,9 @@ const state = {
   arcTypes: [],
   selected: null, // movie index (string) or null
   highlighted: new Set(),
+  // Percentile rank per axis (see computeAxisPercentiles) — shared with the
+  // 3D view so the tooltip and the detail panel can't disagree.
+  axisPct: { levity: [], threat: [], intimacy: [] },
   // Axis bounds match the slider range, which is wider than [-1, 1] because
   // the display transform pushes the most extreme films past the axis ring.
   filters: {
@@ -54,8 +57,11 @@ let space;
 // makes it useless as a readout — the panel should say "how does this compare
 // to every other film", and that's the rank. The stretch is monotone, so
 // ranking the shipped values recovers it exactly.
-const axisPct = { levity: [], threat: [], intimacy: [] };
-
+//
+// Lives on `state` rather than module scope because the 3D hover tooltip needs
+// the same numbers, and space3d.js only ever sees `state` — when this was local
+// to main.js the tooltip kept its own (v+1)/2 formula and drifted out of sync
+// with the panel the moment the display transform changed.
 function computeAxisPercentiles() {
   const n = state.movies.length;
   for (const axis of ["levity", "threat", "intimacy"]) {
@@ -64,7 +70,7 @@ function computeAxisPercentiles() {
       .sort((a, b) => a[0] - b[0]);
     const out = new Array(n);
     order.forEach(([, i], r) => (out[i] = Math.round(((r + 0.5) / n) * 100)));
-    axisPct[axis] = out;
+    state.axisPct[axis] = out;
   }
 }
 
@@ -191,9 +197,9 @@ function renderDetail(idx) {
     : "";
   const directors = m.directors.length ? ` · ${m.directors.join(", ")}` : "";
   const axisReadout = `<div class="axis-readout">
-    <span>Levity <b class="levity">${axisPct.levity[idx]}</b></span>
-    <span>Threat <b class="threat">${axisPct.threat[idx]}</b></span>
-    <span>Intimacy <b class="intimacy">${axisPct.intimacy[idx]}</b></span>
+    <span>Levity <b class="levity">${state.axisPct.levity[idx]}</b></span>
+    <span>Threat <b class="threat">${state.axisPct.threat[idx]}</b></span>
+    <span>Intimacy <b class="intimacy">${state.axisPct.intimacy[idx]}</b></span>
   </div>`;
   const chips = m.tags.length
     ? `<div class="chips" role="group" aria-label="What did you like about this?">${m.tags
@@ -289,6 +295,9 @@ function setupSearch() {
     if (q.length < 2) return close();
     const hits = [];
     for (let i = 0; i < state.movies.length && hits.length < 12; i++) {
+      // Search stays inside the active list — finding a film you then can't
+      // see on the map would be the worse surprise.
+      if (state.listMembers && !state.listMembers.has(i)) continue;
       if (state.movies[i].title.toLowerCase().includes(q)) hits.push(i);
     }
     focused = -1;
@@ -358,15 +367,118 @@ function renderLegend() {
   });
 }
 
+// ---- lists ----
+
+function setActiveList(slug) {
+  const list = slug ? state.lists.find((l) => l.slug === slug) : null;
+  state.activeList = list ? list.slug : null;
+  state.listMembers = list ? new Set(list.members) : null;
+  state.listNN = list ? list.nn : null;
+
+  // A selection held over from the old scope would spotlight a movie that's
+  // now hidden, so keep it only if it survived the switch — and re-select so
+  // its recommendations are recomputed against the new scope.
+  const stillThere =
+    state.selected !== null &&
+    (!state.listMembers || state.listMembers.has(Number(state.selected)));
+  if (state.selected !== null && !stillThere) clearSelection();
+  else if (state.selected !== null) selectMovie(Number(state.selected));
+
+  renderListMenu();
+  space?.restyle();
+  updateFilterCount();
+}
+
+function renderListMenu() {
+  const label = document.getElementById("list-label");
+  const menu = document.getElementById("list-menu");
+  const active = state.lists.find((l) => l.slug === state.activeList);
+  label.textContent = active ? active.name : "All movies";
+  document.getElementById("list-button")
+    .classList.toggle("active", Boolean(active));
+
+  const row = (slug, name, desc, meta) => `
+    <li>
+      <button class="list-item${state.activeList === slug ? " active" : ""}"
+        role="menuitemradio" aria-checked="${state.activeList === slug}"
+        data-slug="${slug ?? ""}">
+        <span class="li-name">${escapeHtml(name)}</span>
+        <span class="li-desc">${escapeHtml(desc)}</span>
+        ${meta ? `<span class="li-meta">${escapeHtml(meta)}</span>` : ""}
+      </button>
+    </li>`;
+
+  menu.innerHTML =
+    row(null, "All movies", "The whole catalog.", `${state.movies.length} films`) +
+    state.lists
+      .map((l) =>
+        row(
+          l.slug,
+          l.name,
+          l.description,
+          // Say so when a list is partial. Our catalog is TMDB's most-voted
+          // ~5000, so an older or more arthouse list arrives incomplete and
+          // the user should know that rather than assume films are missing
+          // for some editorial reason.
+          l.matched < l.total
+            ? `${l.matched} of ${l.total} in catalog`
+            : `${l.matched} films`
+        )
+      )
+      .join("");
+
+  menu.querySelectorAll(".list-item").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setActiveList(btn.dataset.slug || null);
+      closeListMenu();
+    });
+  });
+}
+
+function closeListMenu() {
+  document.getElementById("list-menu").hidden = true;
+  document.getElementById("list-button").setAttribute("aria-expanded", "false");
+}
+
+function setupLists() {
+  const button = document.getElementById("list-button");
+  const menu = document.getElementById("list-menu");
+
+  // No lists.json (or it failed to load) — the app works fine without it, so
+  // hide the control rather than showing an empty menu.
+  if (!state.lists.length) {
+    button.hidden = true;
+    return;
+  }
+
+  button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    menu.hidden = !open;
+    button.setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("click", (e) => {
+    if (!menu.hidden && !menu.contains(e.target)) closeListMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeListMenu();
+  });
+  renderListMenu();
+}
+
 // ---- axis/rating filters ----
 
 function updateFilterCount() {
-  const text = `${space?.visibleCount ?? state.movies.length} of ${state.movies.length} shown`;
-  document.getElementById("filter-count").textContent = text;
+  // Inside a list, the list is the whole world — count against it, not the
+  // catalog, or every reading looks like almost everything is filtered out.
+  const total = state.listMembers ? state.listMembers.size : state.movies.length;
+  const shown = space?.visibleCount ?? total;
+  document.getElementById("filter-count").textContent =
+    shown === 0 ? "no films match these filters" : `${shown} of ${total} shown`;
   // Mobile-collapsed filters still need a hint of what's active without
   // opening the sheet.
   document.getElementById("filter-count-mini").textContent =
-    space && space.visibleCount < state.movies.length ? `· ${space.visibleCount}` : "";
+    shown < total ? `· ${shown}` : "";
 }
 
 function setupFilters() {
@@ -412,6 +524,15 @@ async function main() {
   steer.rows = data.genome_rows;
   data.genome_rows.forEach((mi, r) => steer.rowOf.set(mi, r));
 
+  // Lists are additive — the map is fully usable without them, so a missing
+  // or broken lists.json shouldn't take the whole app down with it.
+  try {
+    const lr = await fetch(import.meta.env.BASE_URL + "data/lists.json");
+    if (lr.ok) state.lists = (await lr.json()).lists ?? [];
+  } catch {
+    state.lists = [];
+  }
+
   space = new Space3D(document.getElementById("space"), state, {
     onPick: (idx) => {
       selectMovie(idx);
@@ -427,6 +548,7 @@ async function main() {
 
   setupSearch();
   setupFilters();
+  setupLists();
   renderLegend();
   document.body.classList.add("ready");
   setTimeout(() => document.getElementById("loading")?.remove(), 800);

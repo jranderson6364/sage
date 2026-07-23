@@ -348,12 +348,15 @@ export class Space3D {
         this.tooltip.hidden = idx === null;
         if (idx !== null) {
           const m = this.state.movies[idx];
-          const pct = (v) => Math.round(((v + 1) / 2) * 100);
+          // Percentile rank, not the raw coordinate — the display transform
+          // pushes extreme films past ±1, so mapping the coordinate onto 0-100
+          // reads over 100 (and below 0) at the tails. main.js owns the ranks.
+          const pct = this.state.axisPct;
           this.tooltip.innerHTML =
             `<strong>${m.title.replaceAll("<", "&lt;")}</strong>` +
             `${m.year ? ` (${m.year})` : ""} · ★ ${m.rating}` +
-            `<span class="t3-scores">levity ${pct(m.levity)} · threat ${pct(m.threat)}` +
-            ` · intimacy ${pct(m.intimacy)}</span>`;
+            `<span class="t3-scores">levity ${pct.levity[idx]} · threat ${pct.threat[idx]}` +
+            ` · intimacy ${pct.intimacy[idx]}</span>`;
         }
       }
       if (idx !== null) {
