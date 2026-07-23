@@ -76,6 +76,13 @@ AXIS_FEATURES = {
 }
 
 
+def _rank01(x):
+    """Map values to uniform [0, 1) by rank (stable, ties broken by order)."""
+    r = np.empty(len(x))
+    r[np.argsort(x, kind="stable")] = np.arange(len(x))
+    return (r + 0.5) / len(x)
+
+
 def knn_impute(emb, values, have_rows, n, k=10, power=5.0):
     """Fill rows missing `values` from their nearest neighbors that have it.
 
@@ -317,7 +324,35 @@ def main() -> None:
             scores[int(k)] = vals
         print(f"applied {len(user)} owner overrides")
 
-    print("predicted label-scale distribution (1-10):")
+    # Partial decorrelation of the three axes.
+    #
+    # levity and threat come out -0.82 correlated, so the cloud collapses onto
+    # a playful-safe / somber-tense diagonal and the off-diagonal corners look
+    # empty. Some of that is real — most comedies are safe, most horror is
+    # serious — but the model also over-conflates: it reads "comedy" as
+    # evidence of safety and "somber" as evidence of threat, so genuine
+    # off-diagonal films land wrong (Shaun of the Dead, a zombie film, at
+    # threat 42; Manchester by the Sea, a quiet grief drama, at threat 46).
+    #
+    # Partial ZCA whitening (C^(-alpha/2)) shrinks every pairwise correlation
+    # toward zero by strength alpha. alpha is set where held-out label accuracy
+    # is still flat: 0->0.4 drops correlation -0.82->-0.62 while mean held-out
+    # rho moves only 0.872->0.863 (and intimacy actually improves, losing its
+    # threat bleed), which means that much correlation was redundant, not
+    # signal. Past ~0.4 accuracy falls and extremes start collapsing (at full
+    # whitening The Exorcist's threat drops to 80), so the genuine part of the
+    # correlation is kept. Off-diagonal corners go from 435 to ~645 films.
+    from scipy.linalg import fractional_matrix_power
+    DECORR_ALPHA = 0.4
+    ranked_scores = np.column_stack([_rank01(scores[:, a]) for a in range(len(AXIS_NAMES))])
+    centered = ranked_scores - ranked_scores.mean(axis=0)
+    corr = np.corrcoef(centered.T)
+    whiten = fractional_matrix_power(corr, -DECORR_ALPHA / 2).real
+    scores = centered @ whiten
+    print(f"partial-decorrelated axes (alpha={DECORR_ALPHA}): "
+          f"corr(lev,thr) {corr[0,1]:+.2f} -> {np.corrcoef(scores.T)[0,1]:+.2f}")
+
+    print("axis distribution after decorrelation:")
     for a, axis in enumerate(AXIS_NAMES):
         c = scores[:, a]
         print(f"  {axis:9} mean {c.mean():.2f}  sd {c.std():.2f}  "
@@ -355,9 +390,7 @@ def main() -> None:
     out = np.empty_like(scores)
     t, B = args.tail_start, args.tail_boost
     for a in range(scores.shape[1]):
-        r = np.empty(len(scores))
-        r[np.argsort(scores[:, a], kind="stable")] = np.arange(len(scores))
-        u = ((r + 0.5) / len(scores)) * 2 - 1          # uniform in [-1, 1]
+        u = _rank01(scores[:, a]) * 2 - 1              # uniform in [-1, 1]
         over = np.clip((np.abs(u) - t) / (1 - t), 0, 1)  # 0 until the tail
         out[:, a] = np.sign(u) * (np.abs(u) + B * over ** 2)
     np.save(args.out, out.astype(np.float32))
